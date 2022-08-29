@@ -102,6 +102,21 @@ add_test(NAME MPI_TEST COMMAND ./check_output.sh ./mpi_test 1e-9 4.5e-5 )
 
 
 ############################################################
+## Compile the MPI mdarray version
+############################################################
+add_executable(mpi_mdarray miniWeather_mpi_mdarray.cpp)
+set_target_properties(mpi_mdarray PROPERTIES COMPILE_FLAGS "${EXE_DEFS}")
+
+add_executable(mpi_mdarray_test miniWeather_mpi_mdarray.cpp)
+set_target_properties(mpi_mdarray_test PROPERTIES COMPILE_FLAGS "${TEST_DEFS}")
+
+target_link_libraries(mpi_mdarray      "${LDFLAGS}")
+target_link_libraries(mpi_mdarray_test "${LDFLAGS}")
+
+add_test(NAME MPI_MDARRAY_TEST COMMAND ./check_output.sh ./mpi_mdarray_test 1e-9 4.5e-5 ) 
+
+
+############################################################
 ## YAKL parallel_for Version
 ############################################################
 add_executable(parallelfor miniWeather_mpi_parallelfor.cpp)
@@ -138,6 +153,8 @@ yakl_process_target(serial_mdarray)
 yakl_process_target(serial_mdarray_test)
 yakl_process_target(mpi)
 yakl_process_target(mpi_test)
+yakl_process_target(mpi_mdarray)
+yakl_process_target(mpi_mdarray_test)
 yakl_process_target(parallelfor)
 yakl_process_target(parallelfor_test)
 yakl_process_target(parallelfor_simd_x)
