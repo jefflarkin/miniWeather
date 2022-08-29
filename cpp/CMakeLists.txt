@@ -83,7 +83,7 @@ set_target_properties(serial_mdarray_test PROPERTIES COMPILE_FLAGS "${TEST_DEFS}
 target_link_libraries(serial_mdarray      "${LDFLAGS}")
 target_link_libraries(serial_mdarray_test "${LDFLAGS}")
 
-add_test(NAME SERIAL_mdarray_TEST COMMAND ./check_output.sh ./serial_mdarray_test 1e-9 4.5e-5 )
+add_test(NAME SERIAL_MDARRAY_TEST COMMAND ./check_output.sh ./serial_mdarray_test 1e-9 4.5e-5 )
 
 
 ############################################################
