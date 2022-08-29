@@ -72,6 +72,21 @@ add_test(NAME SERIAL_TEST COMMAND ./check_output.sh ./serial_test 1e-9 4.5e-5 )
 
 
 ############################################################
+## Compile the serial mdarray version
+############################################################
+add_executable(serial_mdarray miniWeather_serial_mdarray.cpp)
+set_target_properties(serial_mdarray PROPERTIES COMPILE_FLAGS "${EXE_DEFS}")
+
+add_executable(serial_mdarray_test miniWeather_serial.cpp)
+set_target_properties(serial_mdarray_test PROPERTIES COMPILE_FLAGS "${TEST_DEFS}")
+
+target_link_libraries(serial_mdarray      "${LDFLAGS}")
+target_link_libraries(serial_mdarray_test "${LDFLAGS}")
+
+add_test(NAME SERIAL_mdarray_TEST COMMAND ./check_output.sh ./serial_mdarray_test 1e-9 4.5e-5 )
+
+
+############################################################
 ## Compile the MPI version
 ############################################################
 add_executable(mpi miniWeather_mpi.cpp)
@@ -119,6 +134,8 @@ add_test(NAME YAKL_SIMD_X_TEST COMMAND ./check_output.sh ./parallelfor_simd_x_te
 include(YAKL/yakl_utils.cmake)
 yakl_process_target(serial)
 yakl_process_target(serial_test)
+yakl_process_target(serial_mdarray)
+yakl_process_target(serial_mdarray_test)
 yakl_process_target(mpi)
 yakl_process_target(mpi_test)
 yakl_process_target(parallelfor)
