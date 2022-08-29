@@ -118,8 +118,6 @@ int main(int argc, char **argv) {
       //If the time step leads to exceeding the simulation time, shorten it for the last step
       if (etime + dt > sim_time) { dt = sim_time - etime; }
       //Perform a single time step
-      //perform_timestep(state,dt,direction_switch,fixed_data);
-      //perform_timestep2(state2,dt,direction_switch,fixed_data2);
       perform_timestep(state,dt,direction_switch,fixed_data);
       //Inform the user
       #ifndef NO_INFORM
@@ -166,7 +164,6 @@ void perform_timestep( real_3d_array_view state , real dt , int &direction_switc
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
 
-  //array_container<real, 3> state_tmp(NUM_VARS, nz + 2*hs, nx + 2*hs);
   real_3d_container state_tmp_container(NUM_VARS,nz+2*hs,nx+2*hs);
   real_3d_array_view state_tmp(state_tmp_container.data(),state_tmp_container.extents());
 
@@ -191,6 +188,7 @@ void perform_timestep( real_3d_array_view state , real dt , int &direction_switc
   }
   if (direction_switch) { direction_switch = 0; } else { direction_switch = 1; }
 }
+
 
 //Perform a single semi-discretized step in time with the form:
 //state_out = state_init + dt * rhs(state_forcing)
@@ -309,6 +307,7 @@ void compute_tendencies_x( real_3d_array_view state , real_3d_array_view const &
   }
 }
 
+
 //Compute the time tendencies of the fluid state using forcing in the z-direction
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
@@ -379,6 +378,8 @@ void compute_tendencies_z( real_3d_array_view state , real_3d_array_view const &
   }
 }
 
+
+
 //Set this MPI task's halo values in the x-direction. This routine will require MPI
 void set_halo_values_x( real_3d_array_view const &state , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
@@ -429,6 +430,7 @@ void set_halo_values_x( real_3d_array_view const &state , Fixed_data const &fixe
   }
 }
 
+
 //Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
 //decomposition in the vertical direction
 void set_halo_values_z( real_3d_array_view const &state , Fixed_data const &fixed_data ) {
@@ -461,6 +463,7 @@ void set_halo_values_z( real_3d_array_view const &state , Fixed_data const &fixe
   }
 }
 
+
 std::pair<real_3d_container, Fixed_data> init2( real &dt ) {
   int nx;
   int nz;
@@ -472,7 +475,6 @@ std::pair<real_3d_container, Fixed_data> init2( real &dt ) {
   int myrank;
   int mainproc;
   int ierr;
-  
 
   /////////////////////////////////////////////////////////////
   // BEGIN MPI DUMMY SECTION
@@ -498,8 +500,6 @@ std::pair<real_3d_container, Fixed_data> init2( real &dt ) {
   mainproc = (myrank == 0);
 
   //Allocate the model data
-  // The ocode originally returned a Kokkos::View here, which behaves like std::shared_ptr.
-  // We can instead change the type to mdarray and reply on returning a container from a function (being cheap).
   auto state              = real_3d_container(NUM_VARS,nz+2*hs,nx+2*hs);
 
   //Define the maximum stable time step based on an assumed maximum wind speed
@@ -591,7 +591,6 @@ std::pair<real_3d_container, Fixed_data> init2( real &dt ) {
       hy_dens_theta_cell(k) = hy_dens_theta_cell(k) + hr*ht * qweights(kk);
     }
   }
-
   //Compute the hydrostatic background state at vertical cell interfaces
   /////////////////////////////////////////////////
   // TODO: MAKE THIS LOOP A PARALLEL_FOR
@@ -621,6 +620,7 @@ std::pair<real_3d_container, Fixed_data> init2( real &dt ) {
     hy_pressure_int,     //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
   }};
 }
+
 
 //This test case is initially balanced but injects fast, cold air from the left boundary near the model top
 //x and z are input coordinates at which to sample
@@ -828,6 +828,7 @@ void output( real_3d_array_view state , real etime , int &num_out , Fixed_data c
   num_out = num_out + 1;
 }
 
+
 //Error reporting routine for the PNetCDF I/O
 void ncwrap( int ierr , int line ) {
   if (ierr != NC_NOERR) {
@@ -872,3 +873,5 @@ void reductions( real_3d_array_view state , double &mass , double &te , Fixed_da
   mass = glob[0];
   te   = glob[1];
 }
+
+
