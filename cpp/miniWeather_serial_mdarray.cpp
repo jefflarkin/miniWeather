@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <mpi.h>
 #include <ctime>
+#include <utility>
 #include "const.h"
 #include "pnetcdf.h"
 #include <chrono>
@@ -21,27 +22,27 @@ namespace stdex = std::experimental;
 
 template<class ValueType, size_t Rank>
 using array_container = stdex::mdarray<ValueType, stdex::dextents<size_t, Rank>>;
-using real_1d_container = array_container<real, 1>;
-using real_2d_container = array_container<real, 2>;
-using real_3d_container = array_container<real, 3>;
-using double_1d_container = array_container<double, 1>;
-using double_2d_container = array_container<double, 2>;
-using double_3d_container = array_container<double, 3>;
+using real1d_container = array_container<real, 1>;
+using real2d_container = array_container<real, 2>;
+using real3d_container = array_container<real, 3>;
+using double1d_container = array_container<double, 1>;
+using double2d_container = array_container<double, 2>;
+using double3d_container = array_container<double, 3>;
 
 template<class ElementType, size_t Rank>
 using array_view = stdex::mdspan<ElementType, stdex::dextents<size_t, Rank>>;
-using real_1d_array_view = array_view<real, 1>;
-using real_2d_array_view = array_view<real, 2>;
-using real_3d_array_view = array_view<real, 3>;
-using double_1d_array_view = array_view<real, 1>;
-using double_2d_array_view = array_view<real, 2>;
-using double_3d_array_view = array_view<real, 3>;
-using const_real_1d_array_view = array_view<const real, 1>;
-using const_real_2d_array_view = array_view<const real, 2>;
-using const_real_3d_array_view = array_view<const real, 3>;
-using const_double_1d_array_view = array_view<const double, 1>;
-using const_double_2d_array_view = array_view<const double, 2>;
-using const_double_3d_array_view = array_view<const double, 3>;
+using real1d_view = array_view<real, 1>;
+using real2d_view = array_view<real, 2>;
+using real3d_view = array_view<real, 3>;
+using double1d_view = array_view<real, 1>;
+using double2d_view = array_view<real, 2>;
+using double3d_view = array_view<real, 3>;
+using const_real1d_view = array_view<const real, 1>;
+using const_real2d_view = array_view<const real, 2>;
+using const_real3d_view = array_view<const real, 3>;
+using const_double1d_view = array_view<const double, 1>;
+using const_double2d_view = array_view<const double, 2>;
+using const_double3d_view = array_view<const double, 3>;
 
 ///////////////////////////////////////////////////////////////////////////////////////
 // Variables that are initialized but remain static over the coure of the simulation
@@ -52,15 +53,15 @@ struct Fixed_data {
   int nranks, myrank;         //Number of MPI ranks and my rank id
   int left_rank, right_rank;  //MPI Rank IDs that exist to my left and right in the global domain
   int mainproc;             //Am I the main process (rank == 0)?
-  real_1d_container hy_dens_cell;        //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
-  real_1d_container hy_dens_theta_cell;  //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
-  real_1d_container hy_dens_int;         //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
-  real_1d_container hy_dens_theta_int;   //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
-  real_1d_container hy_pressure_int;     //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
+  real1d_container hy_dens_cell;        //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
+  real1d_container hy_dens_theta_cell;  //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
+  real1d_container hy_dens_int;         //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
+  real1d_container hy_dens_theta_int;   //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
+  real1d_container hy_pressure_int;     //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
 };
 
 //Declaring the functions defined after "main"
-std::pair<real_3d_container, Fixed_data> init2 ( real &dt );
+std::pair<real3d_container, Fixed_data> init2 ( real &dt );
 void finalize             ( );
 void injection            ( real x , real z , real &r , real &u , real &w , real &t , real &hr , real &ht );
 void density_current      ( real x , real z , real &r , real &u , real &w , real &t , real &hr , real &ht );
@@ -70,15 +71,15 @@ void collision            ( real x , real z , real &r , real &u , real &w , real
 void hydro_const_theta    ( real z                    , real &r , real &t );
 void hydro_const_bvfreq   ( real z , real bv_freq0    , real &r , real &t );
 real sample_ellipse_cosine( real x , real z , real amp , real x0 , real z0 , real xrad , real zrad );
-void output               ( real_3d_array_view state , real etime , int &num_out , Fixed_data const &fixed_data );
+void output               ( const_real3d_view state , real etime , int &num_out , Fixed_data const &fixed_data );
 void ncwrap               ( int ierr , int line );
-void perform_timestep     ( real_3d_array_view state , real dt , int &direction_switch , Fixed_data const &fixed_data );
-void semi_discrete_step   ( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , int dir , Fixed_data const &fixed_data );
-void compute_tendencies_x ( real_3d_array_view state , real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data );
-void compute_tendencies_z ( real_3d_array_view state , real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data );
-void set_halo_values_x    ( real_3d_array_view const &state  , Fixed_data const &fixed_data );
-void set_halo_values_z    ( real_3d_array_view const &state  , Fixed_data const &fixed_data );
-void reductions           ( real_3d_array_view state , double &mass , double &te , Fixed_data const &fixed_data );
+void perform_timestep     ( real3d_view state , real dt , int &direction_switch , Fixed_data const &fixed_data );
+void semi_discrete_step   ( const_real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , int dir , Fixed_data const &fixed_data );
+void compute_tendencies_x ( const_real3d_view state , real3d_view const &tend , real dt , Fixed_data const &fixed_data );
+void compute_tendencies_z ( const_real3d_view state , real3d_view const &tend , real dt , Fixed_data const &fixed_data );
+void set_halo_values_x    ( real3d_view const &state  , Fixed_data const &fixed_data );
+void set_halo_values_z    ( real3d_view const &state  , Fixed_data const &fixed_data );
+void reductions           ( const_real3d_view state , double &mass , double &te , Fixed_data const &fixed_data );
 
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -92,7 +93,7 @@ int main(int argc, char **argv) {
 
     // init allocates state
     auto [ state_container, fixed_data ] = init2( dt ); // Should return fixed_data
-    auto state = real_3d_array_view(state_container.data(),state_container.extents());
+    auto state = real3d_view(state_container.data(),state_container.extents());
 
     auto &mainproc = fixed_data.mainproc;
 
@@ -161,12 +162,12 @@ int main(int argc, char **argv) {
 // q*     = q_n + dt/3 * rhs(q_n)
 // q**    = q_n + dt/2 * rhs(q* )
 // q_n+1  = q_n + dt/1 * rhs(q**)
-void perform_timestep( real_3d_array_view state , real dt , int &direction_switch , Fixed_data const &fixed_data ) {
+void perform_timestep( real3d_view state , real dt , int &direction_switch , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
 
-  real_3d_container state_tmp_container(NUM_VARS,nz+2*hs,nx+2*hs);
-  real_3d_array_view state_tmp(state_tmp_container.data(),state_tmp_container.extents());
+  real3d_container state_tmp_container(NUM_VARS,nz+2*hs,nx+2*hs);
+  real3d_view state_tmp(state_tmp_container.data(),state_tmp_container.extents());
 
   if (direction_switch) {
     //x-direction first
@@ -194,15 +195,15 @@ void perform_timestep( real_3d_array_view state , real dt , int &direction_switc
 //Perform a single semi-discretized step in time with the form:
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
-void semi_discrete_step( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , int dir , Fixed_data const &fixed_data ) {
+void semi_discrete_step( const_real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , int dir , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &i_beg              = fixed_data.i_beg             ;
   auto &k_beg              = fixed_data.k_beg             ;
   auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
 
-  real_3d_container tend_container(NUM_VARS,nz,nx);
-  real_3d_array_view tend(tend_container.data(),tend_container.extents());
+  real3d_container tend_container(NUM_VARS,nz,nx);
+  real3d_view tend(tend_container.data(),tend_container.extents());
 
   if        (dir == DIR_X) {
     //Set the halo values for this MPI task's fluid state in the x-direction
@@ -250,13 +251,13 @@ void semi_discrete_step( real_3d_array_view const state_init , real_3d_array_vie
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-void compute_tendencies_x( real_3d_array_view state , real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data ) {
+void compute_tendencies_x( const_real3d_view state , real3d_view const &tend , real dt , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
   auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
 
-  real_3d_container flux(NUM_VARS,nz,nx+1);
+  real3d_container flux(NUM_VARS,nz,nx+1);
 
   //Compute the hyperviscosity coeficient
   real hv_coef = -hv_beta * dx / (16*dt);
@@ -313,14 +314,14 @@ void compute_tendencies_x( real_3d_array_view state , real_3d_array_view const &
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-void compute_tendencies_z( real_3d_array_view state , real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data ) {
+void compute_tendencies_z( const_real3d_view state , real3d_view const &tend , real dt , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &hy_dens_int        = fixed_data.hy_dens_int       ;
   auto &hy_dens_theta_int  = fixed_data.hy_dens_theta_int ;
   auto &hy_pressure_int    = fixed_data.hy_pressure_int   ;
 
-  real_3d_container flux(NUM_VARS,nz+1,nx);
+  real3d_container flux(NUM_VARS,nz+1,nx);
 
   //Compute the hyperviscosity coeficient
   real hv_coef = -hv_beta * dz / (16*dt);
@@ -382,7 +383,7 @@ void compute_tendencies_z( real_3d_array_view state , real_3d_array_view const &
 
 
 //Set this MPI task's halo values in the x-direction. This routine will require MPI
-void set_halo_values_x( real_3d_array_view const &state , Fixed_data const &fixed_data ) {
+void set_halo_values_x( real3d_view const &state , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &k_beg              = fixed_data.k_beg             ;
@@ -434,7 +435,7 @@ void set_halo_values_x( real_3d_array_view const &state , Fixed_data const &fixe
 
 //Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
 //decomposition in the vertical direction
-void set_halo_values_z( real_3d_array_view const &state , Fixed_data const &fixed_data ) {
+void set_halo_values_z( real3d_view const &state , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
@@ -465,7 +466,7 @@ void set_halo_values_z( real_3d_array_view const &state , Fixed_data const &fixe
 }
 
 
-std::pair<real_3d_container, Fixed_data> init2( real &dt ) {
+std::pair<real3d_container, Fixed_data> init2( real &dt ) {
   int nx;
   int nz;
   int i_beg;
@@ -501,7 +502,7 @@ std::pair<real_3d_container, Fixed_data> init2( real &dt ) {
   mainproc = (myrank == 0);
 
   //Allocate the model data
-  auto state              = real_3d_container(NUM_VARS,nz+2*hs,nx+2*hs);
+  auto state              = real3d_container(NUM_VARS,nz+2*hs,nx+2*hs);
 
   //Define the maximum stable time step based on an assumed maximum wind speed
   dt = min(dx,dz) / max_speed * cfl;
@@ -527,7 +528,6 @@ std::pair<real_3d_container, Fixed_data> init2( real &dt ) {
   qweights(0) = 0.277777777777777777777777777779;
   qweights(1) = 0.444444444444444444444444444444;
   qweights(2) = 0.277777777777777777777777777779;
-  
 
   //////////////////////////////////////////////////////////////////////////
   // Initialize the cell-averaged fluid state via Gauss-Legendre quadrature
@@ -566,11 +566,11 @@ std::pair<real_3d_container, Fixed_data> init2( real &dt ) {
     }
   }
 
-  auto hy_dens_cell       = real_1d_container(nz+2*hs);
-  auto hy_dens_theta_cell = real_1d_container(nz+2*hs);
-  auto hy_dens_int        = real_1d_container(nz+1);
-  auto hy_dens_theta_int  = real_1d_container(nz+1);
-  auto hy_pressure_int    = real_1d_container(nz+1);
+  auto hy_dens_cell       = real1d_container(nz+2*hs);
+  auto hy_dens_theta_cell = real1d_container(nz+2*hs);
+  auto hy_dens_int        = real1d_container(nz+1);
+  auto hy_dens_theta_int  = real1d_container(nz+1);
+  auto hy_pressure_int    = real1d_container(nz+1);
 
   //Compute the hydrostatic background state over vertical cell averages
   /////////////////////////////////////////////////
@@ -592,6 +592,7 @@ std::pair<real_3d_container, Fixed_data> init2( real &dt ) {
       hy_dens_theta_cell(k) = hy_dens_theta_cell(k) + hr*ht * qweights(kk);
     }
   }
+
   //Compute the hydrostatic background state at vertical cell interfaces
   /////////////////////////////////////////////////
   // TODO: MAKE THIS LOOP A PARALLEL_FOR
@@ -739,7 +740,7 @@ real sample_ellipse_cosine( real x , real z , real amp , real x0 , real z0 , rea
 //Output the fluid state (state) to a NetCDF file at a given elapsed model time (etime)
 //The file I/O uses parallel-netcdf, the only external library required for this mini-app.
 //If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
-void output( real_3d_array_view state , real etime , int &num_out , Fixed_data const &fixed_data ) {
+void output( const_real3d_view state , real etime , int &num_out , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &i_beg              = fixed_data.i_beg             ;
@@ -754,10 +755,10 @@ void output( real_3d_array_view state , real etime , int &num_out , Fixed_data c
   //Inform the user
   if (mainproc) { printf("*** OUTPUT ***\n"); }
   //Allocate some (big) temp arrays
-  double_2d_container dens ( nz,nx );
-  double_2d_container uwnd ( nz,nx );
-  double_2d_container wwnd ( nz,nx );
-  double_2d_container theta( nz,nx );
+  double2d_container dens ( nz,nx );
+  double2d_container uwnd ( nz,nx );
+  double2d_container wwnd ( nz,nx );
+  double2d_container theta( nz,nx );
 
   //If the elapsed time is zero, create the file. Otherwise, open the file
   if (etime == 0) {
@@ -845,7 +846,7 @@ void finalize() {
 
 
 //Compute reduced quantities for error checking without resorting to the "ncdiff" tool
-void reductions( real_3d_array_view state , double &mass , double &te , Fixed_data const &fixed_data ) {
+void reductions( const_real3d_view state , double &mass , double &te , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;

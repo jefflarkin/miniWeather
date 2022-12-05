@@ -77,13 +77,28 @@ add_test(NAME SERIAL_TEST COMMAND ./check_output.sh ./serial_test 1e-9 4.5e-5 )
 add_executable(serial_mdarray miniWeather_serial_mdarray.cpp)
 set_target_properties(serial_mdarray PROPERTIES COMPILE_FLAGS "${EXE_DEFS}")
 
-add_executable(serial_mdarray_test miniWeather_serial.cpp)
+add_executable(serial_mdarray_test miniWeather_serial_mdarray.cpp)
 set_target_properties(serial_mdarray_test PROPERTIES COMPILE_FLAGS "${TEST_DEFS}")
 
 target_link_libraries(serial_mdarray      "${LDFLAGS}")
 target_link_libraries(serial_mdarray_test "${LDFLAGS}")
 
 add_test(NAME SERIAL_MDARRAY_TEST COMMAND ./check_output.sh ./serial_mdarray_test 1e-9 4.5e-5 )
+
+
+############################################################
+## Compile the serial mdarray stdpar version
+############################################################
+add_executable(serial_mdarray_stdpar miniWeather_serial_mdarray_stdpar.cpp)
+set_target_properties(serial_mdarray_stdpar PROPERTIES COMPILE_FLAGS "${EXE_DEFS} -stdpar=gpu")
+
+add_executable(serial_mdarray_stdpar_test miniWeather_serial_mdarray_stdpar.cpp)
+set_target_properties(serial_mdarray_stdpar_test PROPERTIES COMPILE_FLAGS "${TEST_DEFS} -stdpar=gpu")
+
+target_link_libraries(serial_mdarray_stdpar      "${LDFLAGS} -stdpar=gpu")
+target_link_libraries(serial_mdarray_stdpar_test "${LDFLAGS} -stdpar=gpu")
+
+add_test(NAME SERIAL_MDARRAY_STDPAR_TEST COMMAND ./check_output.sh ./serial_mdarray_stdpar_test 1e-9 4.5e-5 )
 
 
 ############################################################
@@ -151,6 +166,8 @@ yakl_process_target(serial)
 yakl_process_target(serial_test)
 yakl_process_target(serial_mdarray)
 yakl_process_target(serial_mdarray_test)
+yakl_process_target(serial_mdarray_stdpar)
+yakl_process_target(serial_mdarray_stdpar_test)
 yakl_process_target(mpi)
 yakl_process_target(mpi_test)
 yakl_process_target(mpi_mdarray)
