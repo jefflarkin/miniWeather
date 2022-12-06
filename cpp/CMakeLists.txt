@@ -74,7 +74,7 @@ add_test(NAME SERIAL_TEST COMMAND ./check_output.sh ./serial_test 1e-9 4.5e-5 )
 ############################################################
 ## Compile the serial mdarray version
 ############################################################
-add_executable(serial_mdarray miniWeather_serial_mdarray.cpp)
+add_executable(serial_mdarray  miniWeather_serial_mdarray.cpp)
 set_target_properties(serial_mdarray PROPERTIES COMPILE_FLAGS "${EXE_DEFS}")
 
 add_executable(serial_mdarray_test miniWeather_serial_mdarray.cpp)
@@ -99,6 +99,20 @@ target_link_libraries(serial_mdarray_stdpar      "${LDFLAGS} -stdpar=gpu")
 target_link_libraries(serial_mdarray_stdpar_test "${LDFLAGS} -stdpar=gpu")
 
 add_test(NAME SERIAL_MDARRAY_STDPAR_TEST COMMAND ./check_output.sh ./serial_mdarray_stdpar_test 1e-9 4.5e-5 )
+
+############################################################
+## Compile the serial mdarray stdexec version
+############################################################
+add_executable(serial_mdarray_stdexec miniWeather_serial_mdarray_stdexec.cpp)
+set_target_properties(serial_mdarray_stdexec PROPERTIES COMPILE_FLAGS "${EXE_DEFS} -stdpar=gpu")
+
+add_executable(serial_mdarray_stdexec_test miniWeather_serial_mdarray_stdexec.cpp)
+set_target_properties(serial_mdarray_stdexec_test PROPERTIES COMPILE_FLAGS "${TEST_DEFS} -stdpar=gpu")
+
+target_link_libraries(serial_mdarray_stdexec      "${LDFLAGS} -stdpar=gpu")
+target_link_libraries(serial_mdarray_stdexec_test "${LDFLAGS} -stdpar=gpu")
+
+add_test(NAME SERIAL_MDARRAY_STDEXEC_TEST COMMAND ./check_output.sh ./serial_mdarray_stdexec_test 1e-9 4.5e-5 )
 
 
 ############################################################
@@ -168,6 +182,8 @@ yakl_process_target(serial_mdarray)
 yakl_process_target(serial_mdarray_test)
 yakl_process_target(serial_mdarray_stdpar)
 yakl_process_target(serial_mdarray_stdpar_test)
+yakl_process_target(serial_mdarray_stdexec)
+yakl_process_target(serial_mdarray_stdexec_test)
 yakl_process_target(mpi)
 yakl_process_target(mpi_test)
 yakl_process_target(mpi_mdarray)
