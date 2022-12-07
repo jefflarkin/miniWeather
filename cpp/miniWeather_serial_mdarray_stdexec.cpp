@@ -88,7 +88,8 @@ real sample_ellipse_cosine( real x , real z , real amp , real x0 , real z0 , rea
 void output               ( real_3d_array_view state , real etime , int &num_out , Fixed_data const &fixed_data );
 void ncwrap               ( int ierr , int line );
 void perform_timestep     ( real_3d_array_view state , real dt , int &direction_switch , Fixed_data const &fixed_data );
-void semi_discrete_step   ( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , int dir , Fixed_data const &fixed_data );
+void semi_discrete_step_x   ( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data );
+void semi_discrete_step_z   ( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data );
 auto compute_tendencies_x ( real_3d_array_view state , real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data );
 auto compute_tendencies_z ( real_3d_array_view state , real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data );
 auto set_halo_values_x    ( real_3d_array_view const &state  , Fixed_data const &fixed_data );
@@ -185,22 +186,22 @@ void perform_timestep( real_3d_array_view state , real dt , int &direction_switc
 
   if (direction_switch) {
     //x-direction first
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_X , fixed_data );
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , DIR_X , fixed_data );
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , DIR_X , fixed_data );
+    semi_discrete_step_x( state , state     , state_tmp , dt / 3 , fixed_data );
+    semi_discrete_step_x( state , state_tmp , state_tmp , dt / 2 , fixed_data );
+    semi_discrete_step_x( state , state_tmp , state     , dt / 1 , fixed_data );
     //z-direction second
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_Z , fixed_data );
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , DIR_Z , fixed_data );
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , DIR_Z , fixed_data );
+    semi_discrete_step_z( state , state     , state_tmp , dt / 3 , fixed_data );
+    semi_discrete_step_z( state , state_tmp , state_tmp , dt / 2 , fixed_data );
+    semi_discrete_step_z( state , state_tmp , state     , dt / 1 , fixed_data );
   } else {
     //z-direction second
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_Z , fixed_data );
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , DIR_Z , fixed_data );
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , DIR_Z , fixed_data );
+    semi_discrete_step_z( state , state     , state_tmp , dt / 3 , fixed_data );
+    semi_discrete_step_z( state , state_tmp , state_tmp , dt / 2 , fixed_data );
+    semi_discrete_step_z( state , state_tmp , state     , dt / 1 , fixed_data );
     //x-direction first
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_X , fixed_data );
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , DIR_X , fixed_data );
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , DIR_X , fixed_data );
+    semi_discrete_step_x( state , state     , state_tmp , dt / 3 , fixed_data );
+    semi_discrete_step_x( state , state_tmp , state_tmp , dt / 2 , fixed_data );
+    semi_discrete_step_x( state , state_tmp , state     , dt / 1 , fixed_data );
   }
   if (direction_switch) { direction_switch = 0; } else { direction_switch = 1; }
 }
@@ -407,10 +408,10 @@ auto compute_tendencies_z( real_3d_array_view state , real_3d_array_view const &
   return compute_flux | compute_tend;
 }
 
-//Perform a single semi-discretized step in time with the form:
+//Perform a single semi-discretized step in time on X direction with the form:
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
-void semi_discrete_step( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , int dir , Fixed_data const &fixed_data ) {
+void semi_discrete_step_x( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &i_beg              = fixed_data.i_beg             ;
@@ -422,19 +423,10 @@ void semi_discrete_step( real_3d_array_view const state_init , real_3d_array_vie
 
   exec::static_thread_pool ctx(1);
   auto sch = ctx.get_scheduler();
-  if (dir == DIR_X) {
-    //Set the halo values for this MPI task's fluid state in the x-direction
-    auto halo_x = set_halo_values_x(state_forcing,fixed_data);
-    //Compute the time tendencies for the fluid state in the x-direction
-    auto tend_x = compute_tendencies_x(state_forcing,tend,dt,fixed_data);
-    stdexec::sync_wait(stdexec::schedule(sch) | halo_x | tend_x);
-  } else if (dir == DIR_Z) {
-    //Set the halo values for this MPI task's fluid state in the z-direction
-    auto halo_z = set_halo_values_z(state_forcing,fixed_data);
-    //Compute the time tendencies for the fluid state in the z-direction
-    auto tend_z = compute_tendencies_z(state_forcing,tend,dt,fixed_data);
-    stdexec::sync_wait(stdexec::schedule(sch) | halo_z | tend_z);
-  }
+  //Set the halo values for this MPI task's fluid state in the x-direction
+  auto halo_x = set_halo_values_x(state_forcing,fixed_data);
+  //Compute the time tendencies for the fluid state in the x-direction
+  auto tend_x = compute_tendencies_x(state_forcing,tend,dt,fixed_data);
 
   /////////////////////////////////////////////////
   // TODO: MAKE THESE 3 LOOPS A PARALLEL_FOR
@@ -456,7 +448,51 @@ void semi_discrete_step( real_3d_array_view const state_init , real_3d_array_vie
       //}
       state_out(ll,_hs+k,_hs+i) = state_init(ll,_hs+k,_hs+i) + _dt * tend(ll,k,i);
     });
-  stdexec::sync_wait(stdexec::schedule(sch) | apply_tend);
+  stdexec::sync_wait(stdexec::schedule(sch) | halo_x | tend_x | apply_tend);
+  yakl::timer_stop("apply tendencies");
+}
+
+//Perform a single semi-discretized step in time on Z direction with the form:
+//state_out = state_init + dt * rhs(state_forcing)
+//Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
+void semi_discrete_step_z( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data ) {
+  auto &nx                 = fixed_data.nx                ;
+  auto &nz                 = fixed_data.nz                ;
+  auto &i_beg              = fixed_data.i_beg             ;
+  auto &k_beg              = fixed_data.k_beg             ;
+  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
+
+  real_3d_container tend_container(NUM_VARS,nz,nx);
+  real_3d_array_view tend(tend_container.data(),tend_container.extents());
+
+  exec::static_thread_pool ctx(1);
+  auto sch = ctx.get_scheduler();
+  //Set the halo values for this MPI task's fluid state in the z-direction
+  auto halo_z = set_halo_values_z(state_forcing,fixed_data);
+  //Compute the time tendencies for the fluid state in the z-direction
+  auto tend_z = compute_tendencies_z(state_forcing,tend,dt,fixed_data);
+
+  /////////////////////////////////////////////////
+  // TODO: MAKE THESE 3 LOOPS A PARALLEL_FOR
+  /////////////////////////////////////////////////
+  //Apply the tendencies to the fluid state
+  yakl::timer_start("apply tendencies");
+  int _i_beg = i_beg,
+      _k_beg = k_beg,
+      _hs    = hs;
+  double _dt = dt;
+  auto apply_tend = stdexec::bulk(NUM_VARS*nz*nx,[=](int idx)
+    {
+      auto [i, k, ll] = idx3d(idx, nx, nz);
+      //if (data_spec_int == DATA_SPEC_GRAVITY_WAVES) {
+      //  real x = (_i_beg + i+0.5)*dx;
+      //  real z = (_k_beg + k+0.5)*dz;
+      //  real wpert = sample_ellipse_cosine( x,z , 0.01 , xlen/8,1000., 500.,500. );
+      //  tend(ID_WMOM,k,i) += wpert*hy_dens_cell(_hs+k);
+      //}
+      state_out(ll,_hs+k,_hs+i) = state_init(ll,_hs+k,_hs+i) + _dt * tend(ll,k,i);
+    });
+  stdexec::sync_wait(stdexec::schedule(sch) | halo_z | tend_z | apply_tend);
   yakl::timer_stop("apply tendencies");
 }
 
