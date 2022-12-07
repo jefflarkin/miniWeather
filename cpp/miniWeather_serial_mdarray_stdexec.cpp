@@ -238,6 +238,7 @@ auto set_halo_values_x( real_3d_array_view const &state , Fixed_data const &fixe
   });
   ////////////////////////////////////////////////////
 
+  // FIXME - Maybe hack repeat to do this? Maybe add conditional adapter.
   auto next = stdexec::bulk(nz*hs, [=](int idx)
   {
     if (data_spec_int == DATA_SPEC_INJECTION) {
