@@ -88,8 +88,8 @@ real sample_ellipse_cosine( real x , real z , real amp , real x0 , real z0 , rea
 void output               ( real_3d_array_view state , real etime , int &num_out , Fixed_data const &fixed_data );
 void ncwrap               ( int ierr , int line );
 void perform_timestep     ( real_3d_array_view state , real dt , int &direction_switch , Fixed_data const &fixed_data );
-void semi_discrete_step_x   ( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data );
-void semi_discrete_step_z   ( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data );
+auto semi_discrete_step_x   ( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data );
+auto semi_discrete_step_z   ( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data );
 auto compute_tendencies_x ( real_3d_array_view state , real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data );
 auto compute_tendencies_z ( real_3d_array_view state , real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data );
 auto set_halo_values_x    ( real_3d_array_view const &state  , Fixed_data const &fixed_data );
@@ -169,42 +169,6 @@ int main(int argc, char **argv) {
   MPI_Finalize();
 }
 
-
-//Performs a single dimensionally split time step using a simple low-storate three-stage Runge-Kutta time integrator
-//The dimensional splitting is a second-order-accurate alternating Strang splitting in which the
-//order of directions is alternated each time step.
-//The Runge-Kutta method used here is defined as follows:
-// q*     = q_n + dt/3 * rhs(q_n)
-// q**    = q_n + dt/2 * rhs(q* )
-// q_n+1  = q_n + dt/1 * rhs(q**)
-void perform_timestep( real_3d_array_view state , real dt , int &direction_switch , Fixed_data const &fixed_data ) {
-  auto &nx                 = fixed_data.nx                ;
-  auto &nz                 = fixed_data.nz                ;
-
-  real_3d_container state_tmp_container(NUM_VARS,nz+2*hs,nx+2*hs);
-  real_3d_array_view state_tmp(state_tmp_container.data(),state_tmp_container.extents());
-
-  if (direction_switch) {
-    //x-direction first
-    semi_discrete_step_x( state , state     , state_tmp , dt / 3 , fixed_data );
-    semi_discrete_step_x( state , state_tmp , state_tmp , dt / 2 , fixed_data );
-    semi_discrete_step_x( state , state_tmp , state     , dt / 1 , fixed_data );
-    //z-direction second
-    semi_discrete_step_z( state , state     , state_tmp , dt / 3 , fixed_data );
-    semi_discrete_step_z( state , state_tmp , state_tmp , dt / 2 , fixed_data );
-    semi_discrete_step_z( state , state_tmp , state     , dt / 1 , fixed_data );
-  } else {
-    //z-direction second
-    semi_discrete_step_z( state , state     , state_tmp , dt / 3 , fixed_data );
-    semi_discrete_step_z( state , state_tmp , state_tmp , dt / 2 , fixed_data );
-    semi_discrete_step_z( state , state_tmp , state     , dt / 1 , fixed_data );
-    //x-direction first
-    semi_discrete_step_x( state , state     , state_tmp , dt / 3 , fixed_data );
-    semi_discrete_step_x( state , state_tmp , state_tmp , dt / 2 , fixed_data );
-    semi_discrete_step_x( state , state_tmp , state     , dt / 1 , fixed_data );
-  }
-  if (direction_switch) { direction_switch = 0; } else { direction_switch = 1; }
-}
 
 
 //Set this MPI task's halo values in the x-direction. This routine will require MPI
@@ -411,7 +375,7 @@ auto compute_tendencies_z( real_3d_array_view state , real_3d_array_view const &
 //Perform a single semi-discretized step in time on X direction with the form:
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
-void semi_discrete_step_x( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data ) {
+auto semi_discrete_step_x( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &i_beg              = fixed_data.i_beg             ;
@@ -421,8 +385,8 @@ void semi_discrete_step_x( real_3d_array_view const state_init , real_3d_array_v
   real_3d_container tend_container(NUM_VARS,nz,nx);
   real_3d_array_view tend(tend_container.data(),tend_container.extents());
 
-  exec::static_thread_pool ctx(1);
-  auto sch = ctx.get_scheduler();
+  //exec::static_thread_pool ctx(1);
+  //auto sch = ctx.get_scheduler();
   //Set the halo values for this MPI task's fluid state in the x-direction
   auto halo_x = set_halo_values_x(state_forcing,fixed_data);
   //Compute the time tendencies for the fluid state in the x-direction
@@ -432,7 +396,6 @@ void semi_discrete_step_x( real_3d_array_view const state_init , real_3d_array_v
   // TODO: MAKE THESE 3 LOOPS A PARALLEL_FOR
   /////////////////////////////////////////////////
   //Apply the tendencies to the fluid state
-  yakl::timer_start("apply tendencies");
   int _i_beg = i_beg,
       _k_beg = k_beg,
       _hs    = hs;
@@ -448,14 +411,14 @@ void semi_discrete_step_x( real_3d_array_view const state_init , real_3d_array_v
       //}
       state_out(ll,_hs+k,_hs+i) = state_init(ll,_hs+k,_hs+i) + _dt * tend(ll,k,i);
     });
-  stdexec::sync_wait(stdexec::schedule(sch) | halo_x | tend_x | apply_tend);
-  yakl::timer_stop("apply tendencies");
+  //stdexec::sync_wait(stdexec::schedule(sch) | halo_x | tend_x | apply_tend);
+  return halo_x | tend_x | apply_tend;
 }
 
 //Perform a single semi-discretized step in time on Z direction with the form:
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
-void semi_discrete_step_z( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data ) {
+auto semi_discrete_step_z( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &i_beg              = fixed_data.i_beg             ;
@@ -465,8 +428,8 @@ void semi_discrete_step_z( real_3d_array_view const state_init , real_3d_array_v
   real_3d_container tend_container(NUM_VARS,nz,nx);
   real_3d_array_view tend(tend_container.data(),tend_container.extents());
 
-  exec::static_thread_pool ctx(1);
-  auto sch = ctx.get_scheduler();
+  //exec::static_thread_pool ctx(1);
+  //auto sch = ctx.get_scheduler();
   //Set the halo values for this MPI task's fluid state in the z-direction
   auto halo_z = set_halo_values_z(state_forcing,fixed_data);
   //Compute the time tendencies for the fluid state in the z-direction
@@ -476,7 +439,7 @@ void semi_discrete_step_z( real_3d_array_view const state_init , real_3d_array_v
   // TODO: MAKE THESE 3 LOOPS A PARALLEL_FOR
   /////////////////////////////////////////////////
   //Apply the tendencies to the fluid state
-  yakl::timer_start("apply tendencies");
+  //yakl::timer_start("apply tendencies");
   int _i_beg = i_beg,
       _k_beg = k_beg,
       _hs    = hs;
@@ -492,8 +455,48 @@ void semi_discrete_step_z( real_3d_array_view const state_init , real_3d_array_v
       //}
       state_out(ll,_hs+k,_hs+i) = state_init(ll,_hs+k,_hs+i) + _dt * tend(ll,k,i);
     });
-  stdexec::sync_wait(stdexec::schedule(sch) | halo_z | tend_z | apply_tend);
-  yakl::timer_stop("apply tendencies");
+  //stdexec::sync_wait(stdexec::schedule(sch) | halo_z | tend_z | apply_tend);
+  return halo_z | tend_z | apply_tend;
+}
+
+//Performs a single dimensionally split time step using a simple low-storate three-stage Runge-Kutta time integrator
+//The dimensional splitting is a second-order-accurate alternating Strang splitting in which the
+//order of directions is alternated each time step.
+//The Runge-Kutta method used here is defined as follows:
+// q*     = q_n + dt/3 * rhs(q_n)
+// q**    = q_n + dt/2 * rhs(q* )
+// q_n+1  = q_n + dt/1 * rhs(q**)
+void perform_timestep( real_3d_array_view state , real dt , int &direction_switch , Fixed_data const &fixed_data ) {
+  auto &nx                 = fixed_data.nx                ;
+  auto &nz                 = fixed_data.nz                ;
+
+  real_3d_container state_tmp_container(NUM_VARS,nz+2*hs,nx+2*hs);
+  real_3d_array_view state_tmp(state_tmp_container.data(),state_tmp_container.extents());
+
+  exec::static_thread_pool ctx(1);
+  auto sch = ctx.get_scheduler();
+  if (direction_switch) { direction_switch = 0; } else { direction_switch = 1; }
+  if (!direction_switch) { // reversed logic to allow swapping first for returns
+    //x-direction first
+    auto step = semi_discrete_step_x( state , state     , state_tmp , dt / 3 , fixed_data )
+              | semi_discrete_step_x( state , state_tmp , state_tmp , dt / 2 , fixed_data )
+              | semi_discrete_step_x( state , state_tmp , state     , dt / 1 , fixed_data )
+    //z-direction second
+              | semi_discrete_step_z( state , state     , state_tmp , dt / 3 , fixed_data )
+              | semi_discrete_step_z( state , state_tmp , state_tmp , dt / 2 , fixed_data )
+              | semi_discrete_step_z( state , state_tmp , state     , dt / 1 , fixed_data );
+    stdexec::sync_wait(stdexec::schedule(sch) | step );
+  } else {
+    //z-direction second
+    auto step = semi_discrete_step_z( state , state     , state_tmp , dt / 3 , fixed_data )
+              | semi_discrete_step_z( state , state_tmp , state_tmp , dt / 2 , fixed_data )
+              | semi_discrete_step_z( state , state_tmp , state     , dt / 1 , fixed_data )
+    //x-direction first
+              | semi_discrete_step_x( state , state     , state_tmp , dt / 3 , fixed_data )
+              | semi_discrete_step_x( state , state_tmp , state_tmp , dt / 2 , fixed_data )
+              | semi_discrete_step_x( state , state_tmp , state     , dt / 1 , fixed_data );
+    stdexec::sync_wait(stdexec::schedule(sch) | step );
+  }
 }
 
 std::pair<real_3d_container, Fixed_data> init( real &dt ) {
