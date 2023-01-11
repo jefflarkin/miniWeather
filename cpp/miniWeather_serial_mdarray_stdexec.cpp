@@ -21,9 +21,12 @@
 #include "const.h"
 #include "pnetcdf.h"
 #include <chrono>
+#include <cstdlib>
 
 #include <experimental/stdexec/execution.hpp>
 #include <experimental/exec/static_thread_pool.hpp>
+#include <experimental/nvexec/stream_context.cuh>
+#include <nvtx3/nvToolsExt.h>
 
 // These should become unnecessary with the addition of cartesian_product
 constexpr std::tuple<int,int> idx2d(int idx, int nx) { return {idx%nx, idx/nx}; }
@@ -87,11 +90,11 @@ void hydro_const_bvfreq   ( real z , real bv_freq0    , real &r , real &t );
 real sample_ellipse_cosine( real x , real z , real amp , real x0 , real z0 , real xrad , real zrad );
 void output               ( real_3d_array_view state , real etime , int &num_out , Fixed_data const &fixed_data );
 void ncwrap               ( int ierr , int line );
-void perform_timestep     ( real_3d_array_view state , real dt , int &direction_switch , Fixed_data const &fixed_data );
-auto semi_discrete_step_x   ( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data );
-auto semi_discrete_step_z   ( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data );
-auto compute_tendencies_x ( real_3d_array_view state , real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data );
-auto compute_tendencies_z ( real_3d_array_view state , real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data );
+void perform_timestep     ( auto sch, real_3d_array_view state , real_3d_array_view state_tmp, real_3d_array_view flux, real_3d_array_view tend, real dt , int &direction_switch , Fixed_data const &fixed_data );
+void semi_discrete_step_x ( auto sch, real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , real_3d_array_view tend , real_3d_array_view flux , Fixed_data const &fixed_data );
+void semi_discrete_step_z ( auto sch, real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , real_3d_array_view tend , real_3d_array_view flux , Fixed_data const &fixed_data );
+auto compute_tendencies_x ( real_3d_array_view state , real_3d_array_view flux, real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data );
+auto compute_tendencies_z ( real_3d_array_view state , real_3d_array_view flux, real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data );
 auto set_halo_values_x    ( real_3d_array_view const &state  , Fixed_data const &fixed_data );
 auto set_halo_values_z    ( real_3d_array_view const &state  , Fixed_data const &fixed_data );
 void reductions           ( real_3d_array_view state , double &mass , double &te , Fixed_data const &fixed_data );
@@ -130,12 +133,27 @@ int main(int argc, char **argv) {
     ////////////////////////////////////////////////////
     // MAIN TIME STEP LOOP
     ////////////////////////////////////////////////////
+    //int num_threads = 1;
+    //if (const char* env_num_threads = std::getenv("MINIWEATHER_NUM_THREADS") ) num_threads = atoi(env_num_threads);
+    //exec::static_thread_pool ctx{num_threads};
+    nvexec::stream_context ctx{};
+    auto sch = ctx.get_scheduler();
+    auto &nx                 = fixed_data.nx                ;
+    auto &nz                 = fixed_data.nz                ;
+    real_3d_container state_tmp_container(NUM_VARS,nz+2*hs,nx+2*hs);
+    real_3d_array_view state_tmp(state_tmp_container.data(),state_tmp_container.extents());
+    real_3d_container tend_container(NUM_VARS,nz,nx);
+    real_3d_array_view tend(tend_container.data(),tend_container.extents());
+    real_3d_container flux_container(NUM_VARS,nz+1,nx+1);
+    real_3d_array_view flux(flux_container.data(),flux_container.extents());
+
     auto t1 = std::chrono::steady_clock::now();
     while (etime < sim_time) {
+      nvtxRangePushA("Step Loop");
       //If the time step leads to exceeding the simulation time, shorten it for the last step
       if (etime + dt > sim_time) { dt = sim_time - etime; }
       //Perform a single time step
-      perform_timestep(state,dt,direction_switch,fixed_data);
+      perform_timestep(sch, state, state_tmp, flux, tend, dt,direction_switch,fixed_data);
       //Inform the user
       #ifndef NO_INFORM
         if (mainproc) { printf( "Elapsed Time: %lf / %lf\n", etime , sim_time ); }
@@ -148,6 +166,7 @@ int main(int argc, char **argv) {
         output_counter = output_counter - output_freq;
         output(state,etime,num_out,fixed_data);
       }
+      nvtxRangePop();
     }
     auto t2 = std::chrono::steady_clock::now();
     if (mainproc) {
@@ -217,7 +236,12 @@ auto set_halo_values_x( real_3d_array_view const &state , Fixed_data const &fixe
       }
     }
   });
+  //int num_threads = 1;
+  //if (const char* env_num_threads = std::getenv("MINIWEATHER_NUM_THREADS") ) num_threads = atoi(env_num_threads);
+  //exec::static_thread_pool ctx{num_threads};
+  //auto sch = ctx.get_scheduler();
   return start | next;
+  //stdexec::sync_wait(stdexec::schedule(sch) | start | next );
 }
 
 //Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
@@ -228,6 +252,7 @@ auto set_halo_values_z( real_3d_array_view const &state , Fixed_data const &fixe
   auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
   
   return stdexec::bulk((nx+2*hs)*NUM_VARS, [=](int idx)
+  //auto halo_z = stdexec::bulk((nx+2*hs)*NUM_VARS, [=](int idx)
   {
     auto [ i, ll ] = idx2d(idx,(nx+2*hs));
     if (ll == ID_WMOM) {
@@ -247,20 +272,22 @@ auto set_halo_values_z( real_3d_array_view const &state , Fixed_data const &fixe
       state(ll,nz+hs+1,i) = state(ll,nz+hs-1,i);
     }
   });
+  //int num_threads = 1;
+  //if (const char* env_num_threads = std::getenv("MINIWEATHER_NUM_THREADS") ) num_threads = atoi(env_num_threads);
+  //exec::static_thread_pool ctx{num_threads};
+  //auto sch = ctx.get_scheduler();
+  //stdexec::sync_wait(stdexec::schedule(sch) | halo_z );
 }
 
 //Compute the time tendencies of the fluid state using forcing in the x-direction
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-auto compute_tendencies_x( real_3d_array_view state , real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data ) {
+auto compute_tendencies_x( real_3d_array_view state , real_3d_array_view flux, real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
   auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
-
-  real_3d_container flux_container(NUM_VARS,nz,nx+1);
-  real_3d_array_view flux(flux_container.data(),flux_container.extents());
 
   //Compute the hyperviscosity coeficient
   real hv_coef = -hv_beta * dx / (16*dt);
@@ -303,6 +330,11 @@ auto compute_tendencies_x( real_3d_array_view state , real_3d_array_view const &
     tend(ll,k,i) = -( flux(ll,k,i+1) - flux(ll,k,i) ) / dx;
   });
 
+  //int num_threads = 1;
+  //if (const char* env_num_threads = std::getenv("MINIWEATHER_NUM_THREADS") ) num_threads = atoi(env_num_threads);
+  //exec::static_thread_pool ctx{num_threads};
+  //auto sch = ctx.get_scheduler();
+  //stdexec::sync_wait(stdexec::schedule(sch) | compute_flux | compute_tend);
   return compute_flux | compute_tend;
 }
 
@@ -310,15 +342,12 @@ auto compute_tendencies_x( real_3d_array_view state , real_3d_array_view const &
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-auto compute_tendencies_z( real_3d_array_view state , real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data ) {
+auto compute_tendencies_z( real_3d_array_view state , real_3d_array_view flux, real_3d_array_view const &tend , real dt , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &hy_dens_int        = fixed_data.hy_dens_int       ;
   auto &hy_dens_theta_int  = fixed_data.hy_dens_theta_int ;
   auto &hy_pressure_int    = fixed_data.hy_pressure_int   ;
-
-  real_3d_container flux_container(NUM_VARS,nz+1,nx);
-  real_3d_array_view flux(flux_container.data(),flux_container.extents());
 
   //Compute the hyperviscosity coeficient
   real hv_coef = -hv_beta * dz / (16*dt);
@@ -370,27 +399,30 @@ auto compute_tendencies_z( real_3d_array_view state , real_3d_array_view const &
   });
 
   return compute_flux | compute_tend;
+  //int num_threads = 1;
+  //if (const char* env_num_threads = std::getenv("MINIWEATHER_NUM_THREADS") ) num_threads = atoi(env_num_threads);
+  //exec::static_thread_pool ctx{num_threads};
+  //auto sch = ctx.get_scheduler();
+  //stdexec::sync_wait(stdexec::schedule(sch) | compute_flux | compute_tend);
 }
 
 //Perform a single semi-discretized step in time on X direction with the form:
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
-auto semi_discrete_step_x( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data ) {
+void semi_discrete_step_x( auto sch, real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , real_3d_array_view flux , real_3d_array_view tend , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &i_beg              = fixed_data.i_beg             ;
   auto &k_beg              = fixed_data.k_beg             ;
   auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
 
-  real_3d_container tend_container(NUM_VARS,nz,nx);
-  real_3d_array_view tend(tend_container.data(),tend_container.extents());
-
-  //exec::static_thread_pool ctx(1);
-  //auto sch = ctx.get_scheduler();
+  nvtxRangePushA("semi_discrete_step_x");
   //Set the halo values for this MPI task's fluid state in the x-direction
   auto halo_x = set_halo_values_x(state_forcing,fixed_data);
+  //set_halo_values_x(state_forcing,fixed_data);
   //Compute the time tendencies for the fluid state in the x-direction
-  auto tend_x = compute_tendencies_x(state_forcing,tend,dt,fixed_data);
+  auto tend_x = compute_tendencies_x(state_forcing,flux,tend,dt,fixed_data);
+  //compute_tendencies_x(state_forcing,tend,dt,fixed_data);
 
   /////////////////////////////////////////////////
   // TODO: MAKE THESE 3 LOOPS A PARALLEL_FOR
@@ -411,29 +443,33 @@ auto semi_discrete_step_x( real_3d_array_view const state_init , real_3d_array_v
       //}
       state_out(ll,_hs+k,_hs+i) = state_init(ll,_hs+k,_hs+i) + _dt * tend(ll,k,i);
     });
-  //stdexec::sync_wait(stdexec::schedule(sch) | halo_x | tend_x | apply_tend);
-  return halo_x | tend_x | apply_tend;
+  //int num_threads = 1;
+  //if (const char* env_num_threads = std::getenv("MINIWEATHER_NUM_THREADS") ) num_threads = atoi(env_num_threads);
+  //exec::static_thread_pool ctx{num_threads};
+  //nvexec::stream_context ctx{};
+  //auto sch = ctx.get_scheduler();
+  stdexec::sync_wait(stdexec::schedule(sch) | halo_x | tend_x | apply_tend);
+  //return halo_x | tend_x | apply_tend;
+  nvtxRangePop();
 }
 
 //Perform a single semi-discretized step in time on Z direction with the form:
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
-auto semi_discrete_step_z( real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , Fixed_data const &fixed_data ) {
+void semi_discrete_step_z( auto sch, real_3d_array_view const state_init , real_3d_array_view const &state_forcing , real_3d_array_view const &state_out , real dt , real_3d_array_view flux , real_3d_array_view tend , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &i_beg              = fixed_data.i_beg             ;
   auto &k_beg              = fixed_data.k_beg             ;
   auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
 
-  real_3d_container tend_container(NUM_VARS,nz,nx);
-  real_3d_array_view tend(tend_container.data(),tend_container.extents());
-
-  //exec::static_thread_pool ctx(1);
-  //auto sch = ctx.get_scheduler();
+  nvtxRangePushA("semi_discrete_step_z");
   //Set the halo values for this MPI task's fluid state in the z-direction
   auto halo_z = set_halo_values_z(state_forcing,fixed_data);
+  //set_halo_values_z(state_forcing,fixed_data);
   //Compute the time tendencies for the fluid state in the z-direction
-  auto tend_z = compute_tendencies_z(state_forcing,tend,dt,fixed_data);
+  auto tend_z = compute_tendencies_z(state_forcing,flux,tend,dt,fixed_data);
+  //compute_tendencies_z(state_forcing,tend,dt,fixed_data);
 
   /////////////////////////////////////////////////
   // TODO: MAKE THESE 3 LOOPS A PARALLEL_FOR
@@ -455,8 +491,14 @@ auto semi_discrete_step_z( real_3d_array_view const state_init , real_3d_array_v
       //}
       state_out(ll,_hs+k,_hs+i) = state_init(ll,_hs+k,_hs+i) + _dt * tend(ll,k,i);
     });
-  //stdexec::sync_wait(stdexec::schedule(sch) | halo_z | tend_z | apply_tend);
-  return halo_z | tend_z | apply_tend;
+  //int num_threads = 1;
+  //if (const char* env_num_threads = std::getenv("MINIWEATHER_NUM_THREADS") ) num_threads = atoi(env_num_threads);
+  //exec::static_thread_pool ctx{num_threads};
+  //nvexec::stream_context ctx{};
+  //auto sch = ctx.get_scheduler();
+  stdexec::sync_wait(stdexec::schedule(sch) | halo_z | tend_z | apply_tend);
+  //return halo_z | tend_z | apply_tend;
+  nvtxRangePop();
 }
 
 //Performs a single dimensionally split time step using a simple low-storate three-stage Runge-Kutta time integrator
@@ -466,36 +508,47 @@ auto semi_discrete_step_z( real_3d_array_view const state_init , real_3d_array_v
 // q*     = q_n + dt/3 * rhs(q_n)
 // q**    = q_n + dt/2 * rhs(q* )
 // q_n+1  = q_n + dt/1 * rhs(q**)
-void perform_timestep( real_3d_array_view state , real dt , int &direction_switch , Fixed_data const &fixed_data ) {
+void perform_timestep( auto sch, real_3d_array_view state , real_3d_array_view state_tmp, real_3d_array_view flux, real_3d_array_view tend, real dt , int &direction_switch , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
 
-  real_3d_container state_tmp_container(NUM_VARS,nz+2*hs,nx+2*hs);
-  real_3d_array_view state_tmp(state_tmp_container.data(),state_tmp_container.extents());
-
-  exec::static_thread_pool ctx(1);
-  auto sch = ctx.get_scheduler();
   if (direction_switch) { direction_switch = 0; } else { direction_switch = 1; }
   if (!direction_switch) { // reversed logic to allow swapping first for returns
     //x-direction first
-    auto step = semi_discrete_step_x( state , state     , state_tmp , dt / 3 , fixed_data )
-              | semi_discrete_step_x( state , state_tmp , state_tmp , dt / 2 , fixed_data )
-              | semi_discrete_step_x( state , state_tmp , state     , dt / 1 , fixed_data )
+    semi_discrete_step_x( sch, state , state     , state_tmp , dt / 3, flux, tend , fixed_data );
+    semi_discrete_step_x( sch, state , state_tmp , state_tmp , dt / 2, flux, tend , fixed_data );
+    semi_discrete_step_x( sch, state , state_tmp , state     , dt / 1, flux, tend , fixed_data );
     //z-direction second
-              | semi_discrete_step_z( state , state     , state_tmp , dt / 3 , fixed_data )
-              | semi_discrete_step_z( state , state_tmp , state_tmp , dt / 2 , fixed_data )
-              | semi_discrete_step_z( state , state_tmp , state     , dt / 1 , fixed_data );
-    stdexec::sync_wait(stdexec::schedule(sch) | step );
+    semi_discrete_step_z( sch, state , state     , state_tmp , dt / 3 , flux, tend, fixed_data );
+    semi_discrete_step_z( sch, state , state_tmp , state_tmp , dt / 2 , flux, tend, fixed_data );
+    semi_discrete_step_z( sch, state , state_tmp , state     , dt / 1 , flux, tend, fixed_data );
+    //x-direction first
+    ///auto step = semi_discrete_step_x( state , state     , state_tmp , dt / 3 , fixed_data )
+    ///          | semi_discrete_step_x( state , state_tmp , state_tmp , dt / 2 , fixed_data )
+    ///          | semi_discrete_step_x( state , state_tmp , state     , dt / 1 , fixed_data )
+    /////z-direction second
+    ///          | semi_discrete_step_z( state , state     , state_tmp , dt / 3 , fixed_data )
+    ///          | semi_discrete_step_z( state , state_tmp , state_tmp , dt / 2 , fixed_data )
+    ///          | semi_discrete_step_z( state , state_tmp , state     , dt / 1 , fixed_data );
+    ///stdexec::sync_wait(stdexec::schedule(sch) | step );
   } else {
     //z-direction second
-    auto step = semi_discrete_step_z( state , state     , state_tmp , dt / 3 , fixed_data )
-              | semi_discrete_step_z( state , state_tmp , state_tmp , dt / 2 , fixed_data )
-              | semi_discrete_step_z( state , state_tmp , state     , dt / 1 , fixed_data )
+    semi_discrete_step_z( sch, state , state     , state_tmp , dt / 3 , flux, tend, fixed_data );
+    semi_discrete_step_z( sch, state , state_tmp , state_tmp , dt / 2 , flux, tend, fixed_data );
+    semi_discrete_step_z( sch, state , state_tmp , state     , dt / 1 , flux, tend, fixed_data );
     //x-direction first
-              | semi_discrete_step_x( state , state     , state_tmp , dt / 3 , fixed_data )
-              | semi_discrete_step_x( state , state_tmp , state_tmp , dt / 2 , fixed_data )
-              | semi_discrete_step_x( state , state_tmp , state     , dt / 1 , fixed_data );
-    stdexec::sync_wait(stdexec::schedule(sch) | step );
+    semi_discrete_step_x( sch, state , state     , state_tmp , dt / 3 , flux, tend, fixed_data );
+    semi_discrete_step_x( sch, state , state_tmp , state_tmp , dt / 2 , flux, tend, fixed_data );
+    semi_discrete_step_x( sch, state , state_tmp , state     , dt / 1 , flux, tend, fixed_data );
+    /////z-direction second
+    ///auto step = semi_discrete_step_z( state , state     , state_tmp , dt / 3 , fixed_data )
+    ///          | semi_discrete_step_z( state , state_tmp , state_tmp , dt / 2 , fixed_data )
+    ///          | semi_discrete_step_z( state , state_tmp , state     , dt / 1 , fixed_data )
+    /////x-direction first
+    ///          | semi_discrete_step_x( state , state     , state_tmp , dt / 3 , fixed_data )
+    ///          | semi_discrete_step_x( state , state_tmp , state_tmp , dt / 2 , fixed_data )
+    ///          | semi_discrete_step_x( state , state_tmp , state     , dt / 1 , fixed_data );
+    ///stdexec::sync_wait(stdexec::schedule(sch) | step );
   }
 }
 

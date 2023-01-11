@@ -90,13 +90,13 @@ add_test(NAME SERIAL_MDARRAY_TEST COMMAND ./check_output.sh ./serial_mdarray_tes
 ## Compile the serial mdarray stdpar version
 ############################################################
 add_executable(serial_mdarray_stdpar miniWeather_serial_mdarray_stdpar.cpp)
-set_target_properties(serial_mdarray_stdpar PROPERTIES COMPILE_FLAGS "${EXE_DEFS} -stdpar=gpu")
+set_target_properties(serial_mdarray_stdpar PROPERTIES COMPILE_FLAGS "${EXE_DEFS} -stdpar=gpu -gpu=cuda11.8")
 
 add_executable(serial_mdarray_stdpar_test miniWeather_serial_mdarray_stdpar.cpp)
-set_target_properties(serial_mdarray_stdpar_test PROPERTIES COMPILE_FLAGS "${TEST_DEFS} -stdpar=gpu")
+set_target_properties(serial_mdarray_stdpar_test PROPERTIES COMPILE_FLAGS "${TEST_DEFS} -stdpar=gpu -gpu=cuda11.8")
 
-target_link_libraries(serial_mdarray_stdpar      "${LDFLAGS} -stdpar=gpu")
-target_link_libraries(serial_mdarray_stdpar_test "${LDFLAGS} -stdpar=gpu")
+target_link_libraries(serial_mdarray_stdpar      "${LDFLAGS} -stdpar=gpu -gpu=cuda11.8")
+target_link_libraries(serial_mdarray_stdpar_test "${LDFLAGS} -stdpar=gpu -gpu=cuda11.8")
 
 add_test(NAME SERIAL_MDARRAY_STDPAR_TEST COMMAND ./check_output.sh ./serial_mdarray_stdpar_test 1e-9 4.5e-5 )
 
@@ -104,13 +104,15 @@ add_test(NAME SERIAL_MDARRAY_STDPAR_TEST COMMAND ./check_output.sh ./serial_mdar
 ## Compile the serial mdarray stdexec version
 ############################################################
 add_executable(serial_mdarray_stdexec miniWeather_serial_mdarray_stdexec.cpp)
-set_target_properties(serial_mdarray_stdexec PROPERTIES COMPILE_FLAGS "${EXE_DEFS} -stdpar=gpu")
+#set_target_properties(serial_mdarray_stdexec PROPERTIES COMPILE_FLAGS "${EXE_DEFS} -stdpar=gpu -I/home/jlarkin/codes/miniWeather/cpp/stdexec/include")
+set_target_properties(serial_mdarray_stdexec PROPERTIES COMPILE_FLAGS "${EXE_DEFS} -stdpar=gpu -cuda -gpu=cuda11.8")
 
 add_executable(serial_mdarray_stdexec_test miniWeather_serial_mdarray_stdexec.cpp)
-set_target_properties(serial_mdarray_stdexec_test PROPERTIES COMPILE_FLAGS "${TEST_DEFS} -stdpar=gpu")
+#set_target_properties(serial_mdarray_stdexec_test PROPERTIES COMPILE_FLAGS "${TEST_DEFS} -stdpar=multicore -I/home/jlarkin/codes/miniWeather/cpp/stdexec/include")
+set_target_properties(serial_mdarray_stdexec_test PROPERTIES COMPILE_FLAGS "${TEST_DEFS} -stdpar=gpu -cuda -gpu=cuda11.8")
 
-target_link_libraries(serial_mdarray_stdexec      "${LDFLAGS} -stdpar=gpu")
-target_link_libraries(serial_mdarray_stdexec_test "${LDFLAGS} -stdpar=gpu")
+target_link_libraries(serial_mdarray_stdexec      "${LDFLAGS} -stdpar=gpu -cuda -gpu=cuda11.8")
+target_link_libraries(serial_mdarray_stdexec_test "${LDFLAGS} -stdpar=gpu -cuda -gpu=cuda11.8")
 
 add_test(NAME SERIAL_MDARRAY_STDEXEC_TEST COMMAND ./check_output.sh ./serial_mdarray_stdexec_test 1e-9 4.5e-5 )
 
