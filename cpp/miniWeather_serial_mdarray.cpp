@@ -252,8 +252,6 @@ void compute_tendencies_x( const_real3d_view state , real3d_view const &flux, re
   auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
   auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
 
-  //real3d_container flux(NUM_VARS,nz,nx+1);
-
   //Compute the hyperviscosity coeficient
   real hv_coef = -hv_beta * dx / (16*dt);
   /////////////////////////////////////////////////
@@ -315,8 +313,6 @@ void compute_tendencies_z( const_real3d_view state , real3d_view const &flux , r
   auto &hy_dens_int        = fixed_data.hy_dens_int       ;
   auto &hy_dens_theta_int  = fixed_data.hy_dens_theta_int ;
   auto &hy_pressure_int    = fixed_data.hy_pressure_int   ;
-
-  //real3d_container flux(NUM_VARS,nz+1,nx);
 
   //Compute the hyperviscosity coeficient
   real hv_coef = -hv_beta * dz / (16*dt);
