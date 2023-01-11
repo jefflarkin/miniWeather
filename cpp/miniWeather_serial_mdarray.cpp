@@ -61,7 +61,7 @@ struct Fixed_data {
 };
 
 //Declaring the functions defined after "main"
-std::tuple<real3d_container, real3d_container, real3d_container, Fixed_data> init ( real &dt );
+std::tuple<real3d_container, real3d_container, real3d_container, real3d_container, Fixed_data> init ( real &dt );
 void finalize             ( );
 void injection            ( real x , real z , real &r , real &u , real &w , real &t , real &hr , real &ht );
 void density_current      ( real x , real z , real &r , real &u , real &w , real &t , real &hr , real &ht );
@@ -73,10 +73,10 @@ void hydro_const_bvfreq   ( real z , real bv_freq0    , real &r , real &t );
 real sample_ellipse_cosine( real x , real z , real amp , real x0 , real z0 , real xrad , real zrad );
 void output               ( const_real3d_view state , real etime , int &num_out , Fixed_data const &fixed_data );
 void ncwrap               ( int ierr , int line );
-void perform_timestep     ( real3d_view state , real3d_view state_tmp , real dt , real3d_view &tend , int &direction_switch , Fixed_data const &fixed_data );
-void semi_discrete_step   ( const_real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , real3d_view tend , int dir , Fixed_data const &fixed_data );
-void compute_tendencies_x ( const_real3d_view state , real3d_view const &tend , real dt , Fixed_data const &fixed_data );
-void compute_tendencies_z ( const_real3d_view state , real3d_view const &tend , real dt , Fixed_data const &fixed_data );
+void perform_timestep     ( real3d_view state , real3d_view state_tmp , real dt , real3d_view &flux , real3d_view &tend , int &direction_switch , Fixed_data const &fixed_data );
+void semi_discrete_step   ( const_real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , real3d_view flux , real3d_view tend , int dir , Fixed_data const &fixed_data );
+void compute_tendencies_x ( const_real3d_view state , real3d_view const &flux , real3d_view const &tend , real dt , Fixed_data const &fixed_data );
+void compute_tendencies_z ( const_real3d_view state , real3d_view const &flux , real3d_view const &tend , real dt , Fixed_data const &fixed_data );
 void set_halo_values_x    ( real3d_view const &state  , Fixed_data const &fixed_data );
 void set_halo_values_z    ( real3d_view const &state  , Fixed_data const &fixed_data );
 void reductions           ( const_real3d_view state , double &mass , double &te , Fixed_data const &fixed_data );
@@ -92,9 +92,10 @@ int main(int argc, char **argv) {
     real dt;                    //Model time step (seconds)
 
     // init allocates state
-    auto [ state_container, state_tmp_container, tend_container, fixed_data ] = init( dt ); // Should return fixed_data
+    auto [ state_container, state_tmp_container, flux_container, tend_container, fixed_data ] = init( dt ); // Should return fixed_data
     real3d_view state(state_container.data(),state_container.extents());
     real3d_view state_tmp(state_tmp_container.data(),state_tmp_container.extents());
+    real3d_view flux(flux_container.data(), flux_container.extents());
     real3d_view tend(tend_container.data(),tend_container.extents());
 
     auto &mainproc = fixed_data.mainproc;
@@ -122,7 +123,7 @@ int main(int argc, char **argv) {
       //If the time step leads to exceeding the simulation time, shorten it for the last step
       if (etime + dt > sim_time) { dt = sim_time - etime; }
       //Perform a single time step
-      perform_timestep(state,state_tmp,dt,tend,direction_switch,fixed_data);
+      perform_timestep(state,state_tmp,dt,flux,tend,direction_switch,fixed_data);
       //Inform the user
       #ifndef NO_INFORM
         if (mainproc) { printf( "Elapsed Time: %lf / %lf\n", etime , sim_time ); }
@@ -164,26 +165,26 @@ int main(int argc, char **argv) {
 // q*     = q_n + dt/3 * rhs(q_n)
 // q**    = q_n + dt/2 * rhs(q* )
 // q_n+1  = q_n + dt/1 * rhs(q**)
-void perform_timestep( real3d_view state , real3d_view state_tmp , real dt , real3d_view &tend , int &direction_switch , Fixed_data const &fixed_data ) {
+void perform_timestep( real3d_view state , real3d_view state_tmp , real dt , real3d_view &flux , real3d_view &tend , int &direction_switch , Fixed_data const &fixed_data ) {
 
   if (direction_switch) {
     //x-direction first
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , tend , DIR_X , fixed_data );
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , tend , DIR_X , fixed_data );
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , tend , DIR_X , fixed_data );
+    semi_discrete_step( state , state     , state_tmp , dt / 3 , flux , tend , DIR_X , fixed_data );
+    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , flux , tend , DIR_X , fixed_data );
+    semi_discrete_step( state , state_tmp , state     , dt / 1 , flux , tend , DIR_X , fixed_data );
     //z-direction second
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , tend , DIR_Z , fixed_data );
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , tend , DIR_Z , fixed_data );
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , tend , DIR_Z , fixed_data );
+    semi_discrete_step( state , state     , state_tmp , dt / 3 , flux , tend , DIR_Z , fixed_data );
+    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , flux , tend , DIR_Z , fixed_data );
+    semi_discrete_step( state , state_tmp , state     , dt / 1 , flux , tend , DIR_Z , fixed_data );
   } else {
     //z-direction second
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , tend , DIR_Z , fixed_data );
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , tend , DIR_Z , fixed_data );
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , tend , DIR_Z , fixed_data );
+    semi_discrete_step( state , state     , state_tmp , dt / 3 , flux , tend , DIR_Z , fixed_data );
+    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , flux , tend , DIR_Z , fixed_data );
+    semi_discrete_step( state , state_tmp , state     , dt / 1 , flux , tend , DIR_Z , fixed_data );
     //x-direction first
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , tend , DIR_X , fixed_data );
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , tend , DIR_X , fixed_data );
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , tend , DIR_X , fixed_data );
+    semi_discrete_step( state , state     , state_tmp , dt / 3 , flux , tend , DIR_X , fixed_data );
+    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , flux , tend , DIR_X , fixed_data );
+    semi_discrete_step( state , state_tmp , state     , dt / 1 , flux , tend , DIR_X , fixed_data );
   }
   if (direction_switch) { direction_switch = 0; } else { direction_switch = 1; }
 }
@@ -192,15 +193,12 @@ void perform_timestep( real3d_view state , real3d_view state_tmp , real dt , rea
 //Perform a single semi-discretized step in time with the form:
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
-void semi_discrete_step( const_real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , real3d_view tend , int dir , Fixed_data const &fixed_data ) {
+void semi_discrete_step( const_real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , real3d_view flux , real3d_view tend , int dir , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &i_beg              = fixed_data.i_beg             ;
   auto &k_beg              = fixed_data.k_beg             ;
   auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
-
-  //real3d_container flux_container(NUM_VARS,nz,nx+1);
-  //real3d_view flux(flux_container.data(), flux_container.extents());
 
   if        (dir == DIR_X) {
     //Set the halo values for this MPI task's fluid state in the x-direction
@@ -209,7 +207,7 @@ void semi_discrete_step( const_real3d_view const state_init , real3d_view const 
     yakl::timer_stop("halo x");
     //Compute the time tendencies for the fluid state in the x-direction
     yakl::timer_start("tendencies x");
-    compute_tendencies_x(state_forcing,tend,dt,fixed_data);
+    compute_tendencies_x(state_forcing,flux,tend,dt,fixed_data);
     yakl::timer_stop("tendencies x");
   } else if (dir == DIR_Z) {
     //Set the halo values for this MPI task's fluid state in the z-direction
@@ -218,7 +216,7 @@ void semi_discrete_step( const_real3d_view const state_init , real3d_view const 
     yakl::timer_stop("halo z");
     //Compute the time tendencies for the fluid state in the z-direction
     yakl::timer_start("tendencies z");
-    compute_tendencies_z(state_forcing,tend,dt,fixed_data);
+    compute_tendencies_z(state_forcing,flux,tend,dt,fixed_data);
     yakl::timer_stop("tendencies z");
   }
 
@@ -248,13 +246,13 @@ void semi_discrete_step( const_real3d_view const state_init , real3d_view const 
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-void compute_tendencies_x( const_real3d_view state , real3d_view const &tend , real dt , Fixed_data const &fixed_data ) {
+void compute_tendencies_x( const_real3d_view state , real3d_view const &flux, real3d_view const &tend , real dt , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
   auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
 
-  real3d_container flux(NUM_VARS,nz,nx+1);
+  //real3d_container flux(NUM_VARS,nz,nx+1);
 
   //Compute the hyperviscosity coeficient
   real hv_coef = -hv_beta * dx / (16*dt);
@@ -311,14 +309,14 @@ void compute_tendencies_x( const_real3d_view state , real3d_view const &tend , r
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-void compute_tendencies_z( const_real3d_view state , real3d_view const &tend , real dt , Fixed_data const &fixed_data ) {
+void compute_tendencies_z( const_real3d_view state , real3d_view const &flux , real3d_view const &tend , real dt , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &hy_dens_int        = fixed_data.hy_dens_int       ;
   auto &hy_dens_theta_int  = fixed_data.hy_dens_theta_int ;
   auto &hy_pressure_int    = fixed_data.hy_pressure_int   ;
 
-  real3d_container flux(NUM_VARS,nz+1,nx);
+  //real3d_container flux(NUM_VARS,nz+1,nx);
 
   //Compute the hyperviscosity coeficient
   real hv_coef = -hv_beta * dz / (16*dt);
@@ -463,7 +461,7 @@ void set_halo_values_z( real3d_view const &state , Fixed_data const &fixed_data 
 }
 
 
-std::tuple<real3d_container, real3d_container, real3d_container, Fixed_data> init( real &dt ) {
+std::tuple<real3d_container, real3d_container, real3d_container, real3d_container, Fixed_data> init( real &dt ) {
   int nx;
   int nz;
   int i_beg;
@@ -607,8 +605,9 @@ std::tuple<real3d_container, real3d_container, real3d_container, Fixed_data> ini
     hy_pressure_int  (k) = C0*pow((hr*ht),gamm);
   }
   real3d_container state_tmp_container(NUM_VARS,nz+2*hs,nx+2*hs);
+  real3d_container flux_container(NUM_VARS,nz+1,nx+1);
   real3d_container tend_container(NUM_VARS,nz,nx);
-  return {state,state_tmp_container,tend_container,{
+  return {state,state_tmp_container,flux_container,tend_container,{
     nx, nz,
     i_beg, k_beg,           //beginning index in the x- and z-directions for this MPI task
     nranks, myrank,         //Number of MPI ranks and my rank id
