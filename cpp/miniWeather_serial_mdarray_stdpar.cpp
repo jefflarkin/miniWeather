@@ -21,6 +21,7 @@
 #include "const.h"
 #include "pnetcdf.h"
 #include <chrono>
+#include <nvtx3/nvToolsExt.h>
 
 // These should become unnecessary with the addition of cartesian_product
 constexpr std::tuple<int,int> idx2d(int idx, int nx) { return {idx%nx, idx/nx}; }
@@ -43,9 +44,9 @@ using array_view = stdex::mdspan<ElementType, stdex::dextents<size_t, Rank>>;
 using real1d_view = array_view<real, 1>;
 using real2d_view = array_view<real, 2>;
 using real3d_view = array_view<real, 3>;
-using double1d_view = array_view<real, 1>;
-using double2d_view = array_view<real, 2>;
-using double3d_view = array_view<real, 3>;
+using double1d_view = array_view<double, 1>;
+using double2d_view = array_view<double, 2>;
+using double3d_view = array_view<double, 3>;
 using const_real1d_view = array_view<const real, 1>;
 using const_real2d_view = array_view<const real, 2>;
 using const_real3d_view = array_view<const real, 3>;
@@ -84,7 +85,7 @@ void hydro_const_bvfreq   ( real z , real bv_freq0    , real &r , real &t );
 real sample_ellipse_cosine( real x , real z , real amp , real x0 , real z0 , real xrad , real zrad );
 void output               ( const_real3d_view state , real etime , int &num_out , Fixed_data const &fixed_data );
 void ncwrap               ( int ierr , int line );
-void perform_timestep     ( real3d_view state , real3d_view state_tmp , real dt , real3d_view &flux , real3d_view &tend , int &direction_switch , Fixed_data const &fixed_data );
+void perform_timestep     ( real3d_view &state , real3d_view &state_tmp , real dt , real3d_view &flux , real3d_view &tend , int &direction_switch , Fixed_data const &fixed_data );
 void semi_discrete_step   ( const_real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , real3d_view flux , real3d_view tend , int dir , Fixed_data const &fixed_data );
 void compute_tendencies_x ( const_real3d_view state , real3d_view const &flux , real3d_view const &tend , real dt , Fixed_data const &fixed_data );
 void compute_tendencies_z ( const_real3d_view state , real3d_view const &flux , real3d_view const &tend , real dt , Fixed_data const &fixed_data );
@@ -131,6 +132,7 @@ int main(int argc, char **argv) {
     ////////////////////////////////////////////////////
     auto t1 = std::chrono::steady_clock::now();
     while (etime < sim_time) {
+      nvtxRangePushA("Step Loop");
       //If the time step leads to exceeding the simulation time, shorten it for the last step
       if (etime + dt > sim_time) { dt = sim_time - etime; }
       //Perform a single time step
@@ -147,6 +149,7 @@ int main(int argc, char **argv) {
         output_counter = output_counter - output_freq;
         output(state,etime,num_out,fixed_data);
       }
+      nvtxRangePop();
     }
     auto t2 = std::chrono::steady_clock::now();
     if (mainproc) {
@@ -176,7 +179,7 @@ int main(int argc, char **argv) {
 // q*     = q_n + dt/3 * rhs(q_n)
 // q**    = q_n + dt/2 * rhs(q* )
 // q_n+1  = q_n + dt/1 * rhs(q**)
-void perform_timestep( real3d_view state , real3d_view state_tmp , real dt , real3d_view &flux , real3d_view &tend , int &direction_switch , Fixed_data const &fixed_data ) {
+void perform_timestep( real3d_view &state , real3d_view &state_tmp , real dt , real3d_view &flux , real3d_view &tend , int &direction_switch , Fixed_data const &fixed_data ) {
 
   if (direction_switch) {
     //x-direction first
@@ -209,7 +212,7 @@ void semi_discrete_step( const_real3d_view const state_init , real3d_view const 
   auto &nz                 = fixed_data.nz                ;
   auto &i_beg              = fixed_data.i_beg             ;
   auto &k_beg              = fixed_data.k_beg             ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
+  auto hy_dens_cell       = const_real1d_view(fixed_data.hy_dens_cell.data(), fixed_data.hy_dens_cell.extents())      ;
 
   if        (dir == DIR_X) {
     //Set the halo values for this MPI task's fluid state in the x-direction
@@ -263,8 +266,8 @@ void semi_discrete_step( const_real3d_view const state_init , real3d_view const 
 void compute_tendencies_x( const_real3d_view state , real3d_view const &flux, real3d_view const &tend , real dt , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
-  auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
+  auto hy_dens_cell       = const_real1d_view(fixed_data.hy_dens_cell.data(), fixed_data.hy_dens_cell.extents())      ;
+  auto hy_dens_theta_cell = const_real1d_view(fixed_data.hy_dens_theta_cell.data(), fixed_data.hy_dens_theta_cell.extents());
 
   //Compute the hyperviscosity coeficient
   real hv_coef = -hv_beta * dx / (16*dt);
@@ -318,9 +321,9 @@ void compute_tendencies_x( const_real3d_view state , real3d_view const &flux, re
 void compute_tendencies_z( const_real3d_view state , real3d_view const &flux , real3d_view const &tend , real dt , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
-  auto &hy_dens_int        = fixed_data.hy_dens_int       ;
-  auto &hy_dens_theta_int  = fixed_data.hy_dens_theta_int ;
-  auto &hy_pressure_int    = fixed_data.hy_pressure_int   ;
+  auto hy_dens_int        = const_real1d_view(fixed_data.hy_dens_int.data(), fixed_data.hy_dens_int.extents())       ;
+  auto hy_dens_theta_int  = const_real1d_view(fixed_data.hy_dens_theta_int.data(), fixed_data.hy_dens_theta_int.extents()) ;
+  auto hy_pressure_int    = const_real1d_view(fixed_data.hy_pressure_int.data(), fixed_data.hy_pressure_int.extents())   ;
 
   //Compute the hyperviscosity coeficient
   real hv_coef = -hv_beta * dz / (16*dt);
@@ -383,8 +386,8 @@ void set_halo_values_x( real3d_view const &state , Fixed_data const &fixed_data 
   auto &left_rank          = fixed_data.left_rank         ;
   auto &right_rank         = fixed_data.right_rank        ;
   auto &myrank             = fixed_data.myrank            ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
-  auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
+  auto hy_dens_cell       = const_real1d_view(fixed_data.hy_dens_cell.data(), fixed_data.hy_dens_cell.extents())      ;
+  auto hy_dens_theta_cell = const_real1d_view(fixed_data.hy_dens_theta_cell.data(), fixed_data.hy_dens_theta_cell.extents());
 
   ////////////////////////////////////////////////////////////////////////
   // TODO: EXCHANGE HALO VALUES WITH NEIGHBORING MPI TASKS
@@ -430,7 +433,7 @@ void set_halo_values_x( real3d_view const &state , Fixed_data const &fixed_data 
 void set_halo_values_z( real3d_view const &state , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
+  auto hy_dens_cell       = const_real1d_view(fixed_data.hy_dens_cell.data(), fixed_data.hy_dens_cell.extents())      ;
   
   auto range1 = std::views::iota(0, (nx+2*hs)*NUM_VARS);
   std::for_each(policy, range1.begin(), range1.end(), [=](int idx)
@@ -599,10 +602,15 @@ std::tuple<real3d_container, real3d_container, real3d_container, real3d_containe
     hy_dens_theta_int(k) = hr*ht;
     hy_pressure_int  (k) = C0*pow((hr*ht),gamm);
   }
-  real3d_container state_tmp_container(NUM_VARS,nz+2*hs,nx+2*hs);
-  real3d_container flux_container(NUM_VARS,nz+1,nx+1);
-  real3d_container tend_container(NUM_VARS,nz,nx);
-  return {state,state_tmp_container,flux_container,tend_container,{
+  auto state_tmp_container = real3d_container(NUM_VARS,nz+2*hs,nx+2*hs);
+  auto flux_container      = real3d_container(NUM_VARS,nz+1,nx+1);
+  auto tend_container      = real3d_container(NUM_VARS,nz,nx);
+  return {
+    std::move(state),
+    std::move(state_tmp_container),
+    std::move(flux_container),
+    std::move(tend_container),
+    {
     nx, nz,
     i_beg, k_beg,           //beginning index in the x- and z-directions for this MPI task
     nranks, myrank,         //Number of MPI ranks and my rank id
@@ -842,8 +850,8 @@ void finalize() {
 void reductions( const_real3d_view state , double &mass , double &te , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
-  auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
+  auto hy_dens_cell       = const_real1d_view(fixed_data.hy_dens_cell.data(), fixed_data.hy_dens_cell.extents())      ;
+  auto hy_dens_theta_cell = const_real1d_view(fixed_data.hy_dens_theta_cell.data(), fixed_data.hy_dens_theta_cell.extents());
 
   mass = 0;
   te   = 0;

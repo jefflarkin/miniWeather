@@ -49,9 +49,9 @@ using array_view = stdex::mdspan<ElementType, stdex::dextents<size_t, Rank>>;
 using real1d_view = array_view<real, 1>;
 using real2d_view = array_view<real, 2>;
 using real3d_view = array_view<real, 3>;
-using double1d_view = array_view<real, 1>;
-using double2d_view = array_view<real, 2>;
-using double3d_view = array_view<real, 3>;
+using double1d_view = array_view<double, 1>;
+using double2d_view = array_view<double, 2>;
+using double3d_view = array_view<double, 3>;
 using const_real1d_view = array_view<const real, 1>;
 using const_real2d_view = array_view<const real, 2>;
 using const_real3d_view = array_view<const real, 3>;
@@ -90,13 +90,13 @@ void hydro_const_bvfreq   ( real z , real bv_freq0    , real &r , real &t );
 real sample_ellipse_cosine( real x , real z , real amp , real x0 , real z0 , real xrad , real zrad );
 void output               ( const_real3d_view state , real etime , int &num_out , Fixed_data const &fixed_data );
 void ncwrap               ( int ierr , int line );
-void perform_timestep     ( real3d_view state , real3d_view state_tmp , real dt , real3d_view &flux , real3d_view &tend , int &direction_switch , Fixed_data const &fixed_data );
-void semi_discrete_step_x   ( const_real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , real3d_view flux , real3d_view tend , int dir , Fixed_data const &fixed_data );
-void semi_discrete_step_z   ( const_real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , real3d_view flux , real3d_view tend , int dir , Fixed_data const &fixed_data );
-void compute_tendencies_x ( const_real3d_view state , real3d_view const &flux , real3d_view const &tend , real dt , Fixed_data const &fixed_data );
-void compute_tendencies_z ( const_real3d_view state , real3d_view const &flux , real3d_view const &tend , real dt , Fixed_data const &fixed_data );
-void set_halo_values_x    ( real3d_view const &state  , Fixed_data const &fixed_data );
-void set_halo_values_z    ( real3d_view const &state  , Fixed_data const &fixed_data );
+void perform_timestep     ( auto sch , real3d_view state , real3d_view state_tmp , real dt , real3d_view &flux , real3d_view &tend , int &direction_switch , Fixed_data const &fixed_data );
+void semi_discrete_step_x ( auto sch , const_real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , real3d_view &flux , real3d_view &tend , int dir , Fixed_data const &fixed_data );
+void semi_discrete_step_z ( auto sch , const_real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , real3d_view &flux , real3d_view &tend , int dir , Fixed_data const &fixed_data );
+auto compute_tendencies_x ( const_real3d_view state , real3d_view const &flux , real3d_view const &tend , real dt , Fixed_data const &fixed_data );
+auto compute_tendencies_z ( const_real3d_view state , real3d_view const &flux , real3d_view const &tend , real dt , Fixed_data const &fixed_data );
+auto set_halo_values_x    ( real3d_view const &state  , Fixed_data const &fixed_data );
+auto set_halo_values_z    ( real3d_view const &state  , Fixed_data const &fixed_data );
 void reductions           ( const_real3d_view state , double &mass , double &te , Fixed_data const &fixed_data );
 
 
@@ -136,20 +136,18 @@ int main(int argc, char **argv) {
     ////////////////////////////////////////////////////
     // MAIN TIME STEP LOOP
     ////////////////////////////////////////////////////
-    //int num_threads = 1;
-    //if (const char* env_num_threads = std::getenv("MINIWEATHER_NUM_THREADS") ) num_threads = atoi(env_num_threads);
+    int num_threads = 1;
+    if (const char* env_num_threads = std::getenv("MINIWEATHER_NUM_THREADS") ) num_threads = atoi(env_num_threads);
     //exec::static_thread_pool ctx{num_threads};
     nvexec::stream_context ctx{};
     auto sch = ctx.get_scheduler();
-    auto &nx                 = fixed_data.nx                ;
-    auto &nz                 = fixed_data.nz                ;
     auto t1 = std::chrono::steady_clock::now();
     while (etime < sim_time) {
       nvtxRangePushA("Step Loop");
       //If the time step leads to exceeding the simulation time, shorten it for the last step
       if (etime + dt > sim_time) { dt = sim_time - etime; }
       //Perform a single time step
-      perform_timestep(state,state_tmp,dt,flux,tend,direction_switch,fixed_data);
+      perform_timestep(sch,state,state_tmp,dt,flux,tend,direction_switch,fixed_data);
       //Inform the user
       #ifndef NO_INFORM
         if (mainproc) { printf( "Elapsed Time: %lf / %lf\n", etime , sim_time ); }
@@ -194,8 +192,8 @@ auto set_halo_values_x( real3d_view const &state , Fixed_data const &fixed_data 
   auto &left_rank          = fixed_data.left_rank         ;
   auto &right_rank         = fixed_data.right_rank        ;
   auto &myrank             = fixed_data.myrank            ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
-  auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
+  auto hy_dens_cell       = const_real1d_view(fixed_data.hy_dens_cell.data(), fixed_data.hy_dens_cell.extents())      ;
+  auto hy_dens_theta_cell = const_real1d_view(fixed_data.hy_dens_theta_cell.data(), fixed_data.hy_dens_theta_cell.extents());
 
   ////////////////////////////////////////////////////////////////////////
   // TODO: EXCHANGE HALO VALUES WITH NEIGHBORING MPI TASKS
@@ -245,10 +243,10 @@ auto set_halo_values_x( real3d_view const &state , Fixed_data const &fixed_data 
 auto set_halo_values_z( real3d_view const &state , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
+  auto hy_dens_cell       = const_real1d_view(fixed_data.hy_dens_cell.data(), fixed_data.hy_dens_cell.extents())      ;
   
-  return stdexec::bulk((nx+2*hs)*NUM_VARS, [=](int idx)
   //auto halo_z = stdexec::bulk((nx+2*hs)*NUM_VARS, [=](int idx)
+  return stdexec::bulk((nx+2*hs)*NUM_VARS, [=](int idx)
   {
     auto [ i, ll ] = idx2d(idx,(nx+2*hs));
     if (ll == ID_WMOM) {
@@ -282,8 +280,8 @@ auto set_halo_values_z( real3d_view const &state , Fixed_data const &fixed_data 
 auto compute_tendencies_x( real3d_view state , real3d_view flux, real3d_view const &tend , real dt , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
-  auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
+  auto hy_dens_cell       = const_real1d_view(fixed_data.hy_dens_cell.data(), fixed_data.hy_dens_cell.extents())      ;
+  auto hy_dens_theta_cell = const_real1d_view(fixed_data.hy_dens_theta_cell.data(), fixed_data.hy_dens_theta_cell.extents());
 
   //Compute the hyperviscosity coeficient
   real hv_coef = -hv_beta * dx / (16*dt);
@@ -341,9 +339,9 @@ auto compute_tendencies_x( real3d_view state , real3d_view flux, real3d_view con
 auto compute_tendencies_z( real3d_view state , real3d_view const &flux, real3d_view const &tend , real dt , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
-  auto &hy_dens_int        = fixed_data.hy_dens_int       ;
-  auto &hy_dens_theta_int  = fixed_data.hy_dens_theta_int ;
-  auto &hy_pressure_int    = fixed_data.hy_pressure_int   ;
+  auto hy_dens_int        = const_real1d_view(fixed_data.hy_dens_int.data(), fixed_data.hy_dens_int.extents())       ;
+  auto hy_dens_theta_int  = const_real1d_view(fixed_data.hy_dens_theta_int.data(), fixed_data.hy_dens_theta_int.extents()) ;
+  auto hy_pressure_int    = const_real1d_view(fixed_data.hy_pressure_int.data(), fixed_data.hy_pressure_int.extents())   ;
 
   //Compute the hyperviscosity coeficient
   real hv_coef = -hv_beta * dz / (16*dt);
@@ -405,12 +403,12 @@ auto compute_tendencies_z( real3d_view state , real3d_view const &flux, real3d_v
 //Perform a single semi-discretized step in time on X direction with the form:
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
-void semi_discrete_step_x( auto sch, real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , real3d_view flux , real3d_view tend , Fixed_data const &fixed_data ) {
+void semi_discrete_step_x( auto sch, real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , real3d_view &flux , real3d_view &tend , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &i_beg              = fixed_data.i_beg             ;
   auto &k_beg              = fixed_data.k_beg             ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
+  auto hy_dens_cell       = const_real1d_view(fixed_data.hy_dens_cell.data(), fixed_data.hy_dens_cell.extents())      ;
 
   nvtxRangePushA("semi_discrete_step_x");
   //Set the halo values for this MPI task's fluid state in the x-direction
@@ -452,12 +450,12 @@ void semi_discrete_step_x( auto sch, real3d_view const state_init , real3d_view 
 //Perform a single semi-discretized step in time on Z direction with the form:
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
-void semi_discrete_step_z( auto sch, real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , real3d_view flux , real3d_view tend , Fixed_data const &fixed_data ) {
+void semi_discrete_step_z( auto sch, real3d_view const state_init , real3d_view const &state_forcing , real3d_view const &state_out , real dt , real3d_view &flux , real3d_view &tend , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &i_beg              = fixed_data.i_beg             ;
   auto &k_beg              = fixed_data.k_beg             ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
+  auto hy_dens_cell       = const_real1d_view(fixed_data.hy_dens_cell.data(), fixed_data.hy_dens_cell.extents())      ;
 
   nvtxRangePushA("semi_discrete_step_z");
   //Set the halo values for this MPI task's fluid state in the z-direction
@@ -504,10 +502,7 @@ void semi_discrete_step_z( auto sch, real3d_view const state_init , real3d_view 
 // q*     = q_n + dt/3 * rhs(q_n)
 // q**    = q_n + dt/2 * rhs(q* )
 // q_n+1  = q_n + dt/1 * rhs(q**)
-void perform_timestep( auto sch, real3d_view state , real3d_view state_tmp, real3d_view &flux, real3d_view &tend, real dt , int &direction_switch , Fixed_data const &fixed_data ) {
-  auto &nx                 = fixed_data.nx                ;
-  auto &nz                 = fixed_data.nz                ;
-
+void perform_timestep( auto sch, real3d_view state , real3d_view state_tmp, real dt , real3d_view &flux, real3d_view &tend, int &direction_switch , Fixed_data const &fixed_data ) {
   if (direction_switch) { direction_switch = 0; } else { direction_switch = 1; }
   if (!direction_switch) { // reversed logic to allow swapping first for returns
     //x-direction first
@@ -825,7 +820,7 @@ real sample_ellipse_cosine( real x , real z , real amp , real x0 , real z0 , rea
 //Output the fluid state (state) to a NetCDF file at a given elapsed model time (etime)
 //The file I/O uses parallel-netcdf, the only external library required for this mini-app.
 //If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
-void output( real3d_view state , real etime , int &num_out , Fixed_data const &fixed_data ) {
+void output( const_real3d_view state , real etime , int &num_out , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
   auto &i_beg              = fixed_data.i_beg             ;
@@ -931,11 +926,11 @@ void finalize() {
 
 
 //Compute reduced quantities for error checking without resorting to the "ncdiff" tool
-void reductions( real3d_view state , double &mass , double &te , Fixed_data const &fixed_data ) {
+void reductions( const_real3d_view state , double &mass , double &te , Fixed_data const &fixed_data ) {
   auto &nx                 = fixed_data.nx                ;
   auto &nz                 = fixed_data.nz                ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
-  auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
+  auto hy_dens_cell       = const_real1d_view(fixed_data.hy_dens_cell.data(), fixed_data.hy_dens_cell.extents())      ;
+  auto hy_dens_theta_cell = const_real1d_view(fixed_data.hy_dens_theta_cell.data(), fixed_data.hy_dens_theta_cell.extents());
 
   mass = 0;
   te   = 0;
