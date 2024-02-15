@@ -436,11 +436,11 @@ void set_halo_values_x( double *state, double *hy_dens_cell, double *hy_dens_the
 
   //Wait for sends to finish
   ierr = MPI_Waitall(2,req_s,MPI_STATUSES_IGNORE);
-
+  int _k_beg=k_beg;
   if (data_spec_int == DATA_SPEC_INJECTION) {
     if (myrank == 0) {
       thrust::counting_iterator<int> begin(0),end(hs*nz);
-      std::for_each(std::execution::par,begin,end,[=](int idx)
+      std::for_each(std::execution::par,begin,end,[=,k_beg=_k_beg](int idx)
           {
             int k = idx / hs;
             int i = idx % hs;
@@ -464,10 +464,11 @@ void set_halo_values_z( double *state ) {
   const double mnt_width = xlen/8;
   int _nx = nx,
       _nz = nz,
-      _i_beg = i_beg;
+      _i_beg = i_beg,
+      _data_spec_int=data_spec_int;
   double _dx = dx;
   thrust::counting_iterator<int> begin(0),end(NUM_VARS*(nx+2*hs));
-  std::for_each(std::execution::par,begin,end,[=](int idx)
+  std::for_each(std::execution::par,begin,end,[=,data_spec_int=_data_spec_int](int idx)
       {
         int ll = idx / (_nx+2*hs);
         int i  = idx % (_nx+2*hs);
@@ -905,7 +906,7 @@ void reductions( double &mass , double &te , double *state, double *hy_dens_cell
   auto start = std::make_pair(0.0,0.0);
   thrust::counting_iterator<int> begin(0),end(nz*nx);
   auto results = std::transform_reduce( std::execution::par, begin, end, start,
-    [=](auto a, auto b)
+    [=](std::pair<double,double> a, std::pair<double,double> b)
     {
       return std::make_pair(a.first + b.first, a.second + b.second);
     },
