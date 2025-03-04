@@ -706,12 +706,6 @@ def init(): # -> tuple[real3d, real, Fixed_data]:
     hy_dens_theta_int[k] = hr*ht
     hy_pressure_int[k]   = C0*pow((hr*ht), gamm)
 
-  hy_dens_cell       = realConst1d("hy_dens_cell      ", nz+2*hs)
-  hy_dens_theta_cell = realConst1d("hy_dens_theta_cell", nz+2*hs)
-  hy_dens_int        = realConst1d("hy_dens_int       ", nz+1)
-  hy_dens_theta_int  = realConst1d("hy_dens_theta_int ", nz+1)
-  hy_pressure_int    = realConst1d("hy_pressure_int   ", nz+1)
-
   fixed_data = Fixed_data(nx, nz, i_beg, k_beg,
     nranks, myrank, left_rank, right_rank, mainproc,
     hy_dens_cell, hy_dens_theta_cell, hy_dens_int,
