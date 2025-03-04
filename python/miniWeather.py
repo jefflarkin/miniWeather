@@ -7,6 +7,7 @@
 # //
 # //////////////////////////////////////////////////////////////////////////////////////////
 
+import sys
 import timeit
 #include "const.h"
 #include "pnetcdf.h"
@@ -114,8 +115,8 @@ def main() -> None:
   (mass, te) = reductions(state, fixed_data)
 
   if mainproc:
-    print( f"d_mass: {((mass - mass0)/mass0)}" )
-    print( f"d_te:   {((te   - te0  )/te0  )}" )
+    print(f"d_mass: {((mass - mass0)/mass0)}")
+    print(f"d_te:   {((te   - te0  )/te0  )}")
 
   finalize()
 
@@ -513,9 +514,9 @@ def init(): # -> tuple[real3d, real, Fixed_data]:
 
   # If I'm the main process in MPI, display some grid information
   if mainproc:
-    print( "nx_glob, nz_glob: %d %d\n", nx_glob, nz_glob)
-    print( "dx,dz: %lf %lf\n",dx,dz)
-    print( "dt: %lf\n",dt)
+    print(f"nx_glob, nz_glob: {nx_glob} {nz_glob}\n")
+    print(f"dx,dz: {dx} {dz}\n")
+    print(f"dt: {dt}\n")
 
   # Want to make sure this info is displayed before further output
   # ierr = MPI_Barrier(MPI_COMM_WORLD);
@@ -872,9 +873,9 @@ def output(
 //Error reporting routine for the PNetCDF I/O
 void ncwrap( int ierr , int line ) {
   if (ierr != NC_NOERR) {
-    printf("NetCDF Error at line: %d\n", line);
-    printf("%s\n",ncmpi_strerror(ierr));
-    exit(-1);
+    print(f"NetCDF Error at line: {line}\n")
+    print(f"{ncmpi_strerror(ierr)}\n")
+    sys.exit(-1)
   }
 }
 
