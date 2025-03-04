@@ -67,9 +67,9 @@ int main(int argc, char **argv) {
   #MPI_Init(&argc,&argv);
   #yakl::init();
   {
-    Fixed_data fixed_data;
-    real3d state;
-    real dt;                    //Model time step (seconds)
+    #Fixed_data fixed_data;
+    #real3d state;
+    #real dt;                    //Model time step (seconds)
 
     # init allocates state
     (fixed_data, state, dt) = init() # init( state , dt , fixed_data );
@@ -122,15 +122,15 @@ int main(int argc, char **argv) {
     double mass, te;
     reductions(state,mass,te,fixed_data);
 
-    if (mainproc) {
-      printf( "d_mass: %le\n" , (mass - mass0)/mass0 );
-      printf( "d_te:   %le\n" , (te   - te0  )/te0   );
-    }
+    if mainproc:
+      print( "d_mass: %le\n" % ((mass - mass0)/mass0) )
+      print( "d_te:   %le\n" % ((te   - te0  )/te0  ) )
 
-    finalize();
+    finalize()
   }
-  yakl::finalize();
-  MPI_Finalize();
+
+  # yakl::finalize();
+  # MPI_Finalize();
 }
 
 
@@ -213,26 +213,25 @@ void semi_discrete_step( realConst3d state_init , real3d const &state_forcing , 
     yakl::timer_stop("tendencies z");
   }
 
-  /////////////////////////////////////////////////
-  // TODO: MAKE THESE 3 LOOPS A PARALLEL_FOR
-  /////////////////////////////////////////////////
-  //Apply the tendencies to the fluid state
-  yakl::timer_start("apply tendencies");
-  for (int ll=0; ll<NUM_VARS; ll++) {
-    for (int k=0; k<nz; k++) {
-      for (int i=0; i<nx; i++) {
-        if (data_spec_int == DATA_SPEC_GRAVITY_WAVES) {
-          real x = (i_beg + i+0.5)*dx;
-          real z = (k_beg + k+0.5)*dz;
-          real wpert = sample_ellipse_cosine( x,z , 0.01 , xlen/8,1000., 500.,500. );
-          tend(ID_WMOM,k,i) += wpert*hy_dens_cell(hs+k);
-        }
+  # /////////////////////////////////////////////////
+  # // TODO: MAKE THESE 3 LOOPS A PARALLEL_FOR
+  # /////////////////////////////////////////////////
+  # Apply the tendencies to the fluid state
+  # yakl::timer_start("apply tendencies");
+  for ll in range(NUM_VARS):
+    for k in range(nz):
+      for i in range(nx):
+        if data_spec_int == DATA_SPEC_GRAVITY_WAVES:
+          x: real = (i_beg + i+0.5)*dx;
+          z: real = (k_beg + k+0.5)*dz;
+          wpert: real = sample_ellipse_cosine(x, z, 0.01, xlen/8, 1000.0, 500.0, 500.0)
+          tend[ID_WMOM,k,i] += wpert*hy_dens_cell[hs+k]
+
         state_out(ll,hs+k,hs+i) = state_init(ll,hs+k,hs+i) + dt * tend(ll,k,i);
-      }
-    }
-  }
-  yakl::timer_stop("apply tendencies");
-}
+
+  # yakl::timer_stop("apply tendencies");
+
+  # FIXME (mfh 2025/03/03) This should return something; not sure what yet
 
 
 //Compute the time tendencies of the fluid state using forcing in the x-direction
@@ -381,44 +380,38 @@ void set_halo_values_x( real3d const &state , Fixed_data const &fixed_data ) {
   auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
   auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
 
-  ////////////////////////////////////////////////////////////////////////
-  // TODO: EXCHANGE HALO VALUES WITH NEIGHBORING MPI TASKS
-  // (1) give    state(1:hs,1:nz,1:NUM_VARS)       to   my left  neighbor
-  // (2) receive state(1-hs:0,1:nz,1:NUM_VARS)     from my left  neighbor
-  // (3) give    state(nx-hs+1:nx,1:nz,1:NUM_VARS) to   my right neighbor
-  // (4) receive state(nx+1:nx+hs,1:nz,1:NUM_VARS) from my right neighbor
-  ////////////////////////////////////////////////////////////////////////
+  # //////////////////////////////////////////////////////////////////////
+  # TODO: EXCHANGE HALO VALUES WITH NEIGHBORING MPI TASKS
+  # (1) give    state(1:hs,1:nz,1:NUM_VARS)       to   my left  neighbor
+  # (2) receive state(1-hs:0,1:nz,1:NUM_VARS)     from my left  neighbor
+  # (3) give    state(nx-hs+1:nx,1:nz,1:NUM_VARS) to   my right neighbor
+  # (4) receive state(nx+1:nx+hs,1:nz,1:NUM_VARS) from my right neighbor
+  # //////////////////////////////////////////////////////////////////////
 
-  //////////////////////////////////////////////////////
-  // DELETE THE SERIAL CODE BELOW AND REPLACE WITH MPI
-  //////////////////////////////////////////////////////
-  for (int ll=0; ll<NUM_VARS; ll++) {
-    for (int k=0; k<nz; k++) {
-      state(ll,hs+k,0      ) = state(ll,hs+k,nx+hs-2);
-      state(ll,hs+k,1      ) = state(ll,hs+k,nx+hs-1);
-      state(ll,hs+k,nx+hs  ) = state(ll,hs+k,hs     );
-      state(ll,hs+k,nx+hs+1) = state(ll,hs+k,hs+1   );
-    }
-  }
-  ////////////////////////////////////////////////////
+  # //////////////////////////////////////////////////////
+  # // DELETE THE SERIAL CODE BELOW AND REPLACE WITH MPI
+  # //////////////////////////////////////////////////////
+  for ll in range(NUM_VARS):
+    for k in range(nz):
+      state[ll,hs+k,0      ] = state[ll,hs+k,nx+hs-2];
+      state[ll,hs+k,1      ] = state[ll,hs+k,nx+hs-1];
+      state[ll,hs+k,nx+hs  ] = state[ll,hs+k,hs     ];
+      state[ll,hs+k,nx+hs+1] = state[ll,hs+k,hs+1   ];
 
-  if (data_spec_int == DATA_SPEC_INJECTION) {
-    if (myrank == 0) {
-      /////////////////////////////////////////////////
-      // TODO: MAKE THESE 2 LOOPS A PARALLEL_FOR
-      /////////////////////////////////////////////////
-      for (int k=0; k<nz; k++) {
-        for (int i=0; i<hs; i++) {
-          real z = (k_beg + k+0.5)*dz;
-          if (abs(z-3*zlen/4) <= zlen/16) {
-            state(ID_UMOM,hs+k,i) = (state(ID_DENS,hs+k,i)+hy_dens_cell(hs+k)) * 50.;
-            state(ID_RHOT,hs+k,i) = (state(ID_DENS,hs+k,i)+hy_dens_cell(hs+k)) * 298. - hy_dens_theta_cell(hs+k);
-          }
-        }
-      }
-    }
-  }
-}
+  if data_spec_int == DATA_SPEC_INJECTION:
+    if myrank == 0:
+      #/////////////////////////////////////////////////
+      # TODO: MAKE THESE 2 LOOPS A PARALLEL_FOR
+      #/////////////////////////////////////////////////
+      for k in range(nz):
+        for i in range(hs):
+          z: real = (k_beg + k+0.5)*dz
+          if abs(z-3*zlen/4) <= zlen/16:
+            state[ID_UMOM,hs+k,i] = (state[ID_DENS,hs+k,i] + hy_dens_cell[hs+k]) * 50.0
+            state[ID_RHOT,hs+k,i] = (state[ID_DENS,hs+k,i] + hy_dens_cell[hs+k]) * 298.0 - hy_dens_theta_cell[hs+k]
+
+  # TODO (mfh 2025/03/03) Return something, not sure what yet
+
 
 
 //Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
@@ -428,34 +421,33 @@ void set_halo_values_z( real3d const &state , Fixed_data const &fixed_data ) {
   auto &nz                 = fixed_data.nz                ;
   auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
   
-  /////////////////////////////////////////////////
-  // TODO: MAKE THESE 2 LOOPS A PARALLEL_FOR
-  /////////////////////////////////////////////////
-  for (int ll=0; ll<NUM_VARS; ll++) {
-    for (int i=0; i<nx+2*hs; i++) {
-      if (ll == ID_WMOM) {
-        state(ll,0      ,i) = 0.;
-        state(ll,1      ,i) = 0.;
-        state(ll,nz+hs  ,i) = 0.;
-        state(ll,nz+hs+1,i) = 0.;
-      } else if (ll == ID_UMOM) {
-        state(ll,0      ,i) = state(ll,hs     ,i) / hy_dens_cell(hs     ) * hy_dens_cell(0      );
-        state(ll,1      ,i) = state(ll,hs     ,i) / hy_dens_cell(hs     ) * hy_dens_cell(1      );
-        state(ll,nz+hs  ,i) = state(ll,nz+hs-1,i) / hy_dens_cell(nz+hs-1) * hy_dens_cell(nz+hs  );
-        state(ll,nz+hs+1,i) = state(ll,nz+hs-1,i) / hy_dens_cell(nz+hs-1) * hy_dens_cell(nz+hs+1);
-      } else {
-        state(ll,0      ,i) = state(ll,hs     ,i);
-        state(ll,1      ,i) = state(ll,hs     ,i);
-        state(ll,nz+hs  ,i) = state(ll,nz+hs-1,i);
-        state(ll,nz+hs+1,i) = state(ll,nz+hs-1,i);
-      }
-    }
-  }
-}
+  # /////////////////////////////////////////////////
+  # // TODO: MAKE THESE 2 LOOPS A PARALLEL_FOR
+  # /////////////////////////////////////////////////
+  for ll in range(NUM_VARS):
+    for i in range(nx+2*hs):
+      if ll == ID_WMOM:
+        state[ll,0      ,i] = 0.0
+        state[ll,1      ,i] = 0.0
+        state[ll,nz+hs  ,i] = 0.0
+        state[ll,nz+hs+1,i] = 0.0
+      elif ll == ID_UMOM:
+        state[ll,0      ,i] = state[ll,hs     ,i] / hy_dens_cell[hs     ] * hy_dens_cell[0      ]
+        state[ll,1      ,i] = state[ll,hs     ,i] / hy_dens_cell[hs     ] * hy_dens_cell[1      ]
+        state[ll,nz+hs  ,i] = state[ll,nz+hs-1,i] / hy_dens_cell[nz+hs-1] * hy_dens_cell[nz+hs  ]
+        state[ll,nz+hs+1,i] = state[ll,nz+hs-1,i] / hy_dens_cell[nz+hs-1] * hy_dens_cell[nz+hs+1]
+      else:
+        state[ll,0      ,i] = state[ll,hs     ,i]
+        state[ll,1      ,i] = state[ll,hs     ,i]
+        state[ll,nz+hs  ,i] = state[ll,nz+hs-1,i]
+        state[ll,nz+hs+1,i] = state[ll,nz+hs-1,i]
+
+  # TODO (mfh 2025/03/03) Return something, not sure what yet
+
 
 # state, dt, and fixed_data used to be output parameters.
 # It would be more Pythonic to return them as a tuple.
-def init(): # tuple[real3d, real, Fixed_data]:
+def init(): # -> tuple[real3d, real, Fixed_data]:
   #real3d state
   #Fixed_data fixed_data
   #real dt
@@ -514,8 +506,16 @@ def init(): # tuple[real3d, real, Fixed_data]:
   # SArray<real,1,nqpoints> qpoints;
   # SArray<real,1,nqpoints> qweights;
 
-  qpoints = np.array([0.112701665379258311482073460022, 0.500000000000000000000000000000, 0.887298334620741688517926539980], dtype=real)
-  qweights = np.array([0.277777777777777777777777777779, 0.444444444444444444444444444444, 0.277777777777777777777777777779], dtype=real)
+  qpoints = np.array([
+      0.112701665379258311482073460022,
+      0.500000000000000000000000000000,
+      0.887298334620741688517926539980
+    ], dtype=real)
+  qweights = np.array([
+      0.277777777777777777777777777779,
+      0.444444444444444444444444444444,
+      0.277777777777777777777777777779
+    ], dtype=real)
 
   # //////////////////////////////////////////////////////////////////////////
   # Initialize the cell-averaged fluid state via Gauss-Legendre quadrature
@@ -565,103 +565,120 @@ def init(): # tuple[real3d, real, Fixed_data]:
   hy_dens_theta_int  = real1d("hy_dens_theta_int ", nz+1);
   hy_pressure_int    = real1d("hy_pressure_int   ", nz+1);
 
-  //Compute the hydrostatic background state over vertical cell averages
-  /////////////////////////////////////////////////
-  // TODO: MAKE THIS LOOP A PARALLEL_FOR
-  /////////////////////////////////////////////////
-  for (int k=0; k<nz+2*hs; k++) {
-    hy_dens_cell      (k) = 0.;
-    hy_dens_theta_cell(k) = 0.;
-    for (int kk=0; kk<nqpoints; kk++) {
-      real z = (k_beg + k-hs+0.5)*dz;
-      real r, u, w, t, hr, ht;
-      //Set the fluid state based on the user's specification
-      if (data_spec_int == DATA_SPEC_COLLISION      ) { collision      (0.,z,r,u,w,t,hr,ht); }
-      if (data_spec_int == DATA_SPEC_THERMAL        ) { thermal        (0.,z,r,u,w,t,hr,ht); }
-      if (data_spec_int == DATA_SPEC_GRAVITY_WAVES  ) { gravity_waves  (0.,z,r,u,w,t,hr,ht); }
-      if (data_spec_int == DATA_SPEC_DENSITY_CURRENT) { density_current(0.,z,r,u,w,t,hr,ht); }
-      if (data_spec_int == DATA_SPEC_INJECTION      ) { injection      (0.,z,r,u,w,t,hr,ht); }
-      hy_dens_cell      (k) = hy_dens_cell      (k) + hr    * qweights(kk);
-      hy_dens_theta_cell(k) = hy_dens_theta_cell(k) + hr*ht * qweights(kk);
-    }
-  }
+  # Compute the hydrostatic background state over vertical cell averages
+  # /////////////////////////////////////////////////
+  # // TODO: MAKE THIS LOOP A PARALLEL_FOR
+  # /////////////////////////////////////////////////
+  for k in range(nz+2*hs):
+    hy_dens_cell[k]       = 0.0
+    hy_dens_theta_cell[k] = 0.0
+    for kk in range(nqpoints):
+      z = (k_beg + k-hs+0.5)*dz
+      # real r, u, w, t, hr, ht; # formerly output arguments
+      # Set the fluid state based on the user's specification
+      if data_spec_int == DATA_SPEC_COLLISION:
+        (r, u, w, t, hr, ht) = collision(0.0, z)
+      if data_spec_int == DATA_SPEC_THERMAL:
+        (r, u, w, t, hr, ht) = thermal(0.0, z)
+      if data_spec_int == DATA_SPEC_GRAVITY_WAVES:
+        (r, u, w, t, hr, ht) = gravity_waves(0.0, z)
+      if data_spec_int == DATA_SPEC_DENSITY_CURRENT:
+        (r, u, w, t, hr, ht) = density_current(0.0, z)
+      if data_spec_int == DATA_SPEC_INJECTION:
+        (r, u, w, t, hr, ht) = injection(0.0, z)
+      
+      hy_dens_cell[k]       = hy_dens_cell[k]       + hr    * qweights[kk];
+      hy_dens_theta_cell[k] = hy_dens_theta_cell[k] + hr*ht * qweights[kk];
 
-  //Compute the hydrostatic background state at vertical cell interfaces
-  /////////////////////////////////////////////////
-  // TODO: MAKE THIS LOOP A PARALLEL_FOR
-  /////////////////////////////////////////////////
-  for (int k=0; k<nz+1; k++) {
-    real z = (k_beg + k)*dz;
-    real r, u, w, t, hr, ht;
-    if (data_spec_int == DATA_SPEC_COLLISION      ) { collision      (0.,z,r,u,w,t,hr,ht); }
-    if (data_spec_int == DATA_SPEC_THERMAL        ) { thermal        (0.,z,r,u,w,t,hr,ht); }
-    if (data_spec_int == DATA_SPEC_GRAVITY_WAVES  ) { gravity_waves  (0.,z,r,u,w,t,hr,ht); }
-    if (data_spec_int == DATA_SPEC_DENSITY_CURRENT) { density_current(0.,z,r,u,w,t,hr,ht); }
-    if (data_spec_int == DATA_SPEC_INJECTION      ) { injection      (0.,z,r,u,w,t,hr,ht); }
-    hy_dens_int      (k) = hr;
-    hy_dens_theta_int(k) = hr*ht;
-    hy_pressure_int  (k) = C0*pow((hr*ht),gamm);
-  }
+  # Compute the hydrostatic background state at vertical cell interfaces
+  # /////////////////////////////////////////////////
+  # // TODO: MAKE THIS LOOP A PARALLEL_FOR
+  # /////////////////////////////////////////////////
+  for k in range(nz+1):
+    z = (k_beg + k)*dz
+    # real r, u, w, t, hr, ht; # formerly output arguments
+    if data_spec_int == DATA_SPEC_COLLISION:
+      (r, u, w, t, hr, ht) = collision(0.0, z)
+    if data_spec_int == DATA_SPEC_THERMAL:
+      (r, u, w, t, hr, ht) = thermal(0.0, z)
+    if data_spec_int == DATA_SPEC_GRAVITY_WAVES:
+      (r, u, w, t, hr, ht) = gravity_waves(0.0, z)
+    if data_spec_int == DATA_SPEC_DENSITY_CURRENT:
+      (r, u, w, t, hr, ht) = density_current(0.0, z)
+    if data_spec_int == DATA_SPEC_INJECTION:
+      (r, u, w, t, hr, ht) = injection(0.0, z)
+    
+    hy_dens_int[k]       = hr
+    hy_dens_theta_int[k] = hr*ht
+    hy_pressure_int[k]   = C0*pow((hr*ht),gamm)
 
-  fixed_data.hy_dens_cell       = realConst1d(hy_dens_cell      );
-  fixed_data.hy_dens_theta_cell = realConst1d(hy_dens_theta_cell);
-  fixed_data.hy_dens_int        = realConst1d(hy_dens_int       );
-  fixed_data.hy_dens_theta_int  = realConst1d(hy_dens_theta_int );
-  fixed_data.hy_pressure_int    = realConst1d(hy_pressure_int   );
-}
+  fixed_data.hy_dens_cell       = realConst1d(hy_dens_cell      )
+  fixed_data.hy_dens_theta_cell = realConst1d(hy_dens_theta_cell)
+  fixed_data.hy_dens_int        = realConst1d(hy_dens_int       )
+  fixed_data.hy_dens_theta_int  = realConst1d(hy_dens_theta_int )
+  fixed_data.hy_pressure_int    = realConst1d(hy_pressure_int   )
 
+  # FIXME (mfh 2025/03/03) This should return something; not sure what yet
 
-//This test case is initially balanced but injects fast, cold air from the left boundary near the model top
-//x and z are input coordinates at which to sample
-//r,u,w,t are output density, u-wind, w-wind, and potential temperature at that location
-//hr and ht are output background hydrostatic density and potential temperature at that location
-void injection( real x , real z , real &r , real &u , real &w , real &t , real &hr , real &ht ) {
+# This test case is initially balanced but injects fast, cold air from the left boundary near the model top
+# x and z are input coordinates at which to sample
+# r,u,w,t are output density, u-wind, w-wind, and potential temperature at that location
+# hr and ht are output background hydrostatic density and potential temperature at that location
+def injection(x: real, z: real): # returns (r, u, w, t, hr, ht)
   (hr, ht) = hydro_const_theta(z)
-  r = 0.;
-  t = 0.;
-  u = 0.;
-  w = 0.;
-}
+  r = 0.0
+  t = 0.0
+  u = 0.0
+  w = 0.0
+
+  return (r, u, w, t, hr, ht)
 
 
 # Initialize a density current (falling cold thermal that propagates along the model bottom)
 # x and z are input coordinates at which to sample
 # r,u,w,t are output density, u-wind, w-wind, and potential temperature at that location
 # hr and ht are output background hydrostatic density and potential temperature at that location
-void density_current( real x , real z , real &r , real &u , real &w , real &t , real &hr , real &ht ) {
+def density_current(x: real, z: real): # returns (r, u, w, t, hr, ht)
   (hr, ht) = hydro_const_theta(z)
-  r = 0.;
-  t = 0.;
-  u = 0.;
-  w = 0.;
-  t = t + sample_ellipse_cosine(x,z,-20. ,xlen/2,5000.,4000.,2000.);
-}
+  r = 0.0
+  t = 0.0
+  u = 0.0
+  w = 0.0
+  # FIXME (mfh 2025/03/03) This was originally t = t + ... so perhaps t should also be an input parameter.
+  # On the other hand, t was uninitialized before (which means this was probably incorrect in the original C++).
+  t = sample_ellipse_cosine(x, z, -20.0, xlen/2, 5000.0, 4000.0, 2000.0)
+
+  return (r, u, w, t, hr, ht)
 
 
-//x and z are input coordinates at which to sample
-//r,u,w,t are output density, u-wind, w-wind, and potential temperature at that location
-//hr and ht are output background hydrostatic density and potential temperature at that location
-void gravity_waves ( real x , real z , real &r , real &u , real &w , real &t , real &hr , real &ht ) {
-  hydro_const_bvfreq(z,0.02,hr,ht);
-  r = 0.;
-  t = 0.;
-  u = 15.;
-  w = 0.;
-}
+# x and z are input coordinates at which to sample
+# r,u,w,t are output density, u-wind, w-wind, and potential temperature at that location
+# hr and ht are output background hydrostatic density and potential temperature at that location
+def gravity_waves(x: real, z: real): # returns (r, u, w, t, hr, ht)
+  (hr, ht) = hydro_const_bvfreq(z, 0.02)
+  r = 0.0
+  t = 0.0
+  u = 15.0
+  w = 0.0
+
+  return (r, u, w, t, hr, ht)
 
 
-//Rising thermal
-//x and z are input coordinates at which to sample
-//r,u,w,t are output density, u-wind, w-wind, and potential temperature at that location
-//hr and ht are output background hydrostatic density and potential temperature at that location
-void thermal( real x , real z , real &r , real &u , real &w , real &t , real &hr , real &ht ) {
+# Rising thermal
+# x and z are input coordinates at which to sample
+# r,u,w,t are output density, u-wind, w-wind, and potential temperature at that location
+# hr and ht are output background hydrostatic density and potential temperature at that location
+def thermal(x: real, z: real): # returns (r, u, w, t, hr, ht)
   (hr, ht) = hydro_const_theta(z)
-  r = 0.;
-  t = 0.;
-  u = 0.;
-  w = 0.;
-  t = t + sample_ellipse_cosine(x,z, 3. ,xlen/2,2000.,2000.,2000.);
-}
+  r = 0.0
+  t = 0.0
+  u = 0.0
+  w = 0.0
+  # FIXME (mfh 2025/03/03) This was originally t = t + ... so perhaps t should also be an input parameter.
+  # On the other hand, t was uninitialized before (which means this was probably incorrect in the original C++).
+  t = sample_ellipse_cosine(x, z, 3.0, xlen/2, 2000.0, 2000.0, 2000.0)
+
+  return (r, u, w, t, hr, ht)
 
 
 # Colliding thermals
@@ -674,8 +691,10 @@ def collision(x: real, z: real): # returns (r, u, w, t, hr, ht)
   t = 0.0
   u = 0.0
   w = 0.0
-  t = t + sample_ellipse_cosine(x, z,  20.0 , xlen/2, 2000.0, 2000.0, 2000.0)
-  t = t + sample_ellipse_cosine(x, z, -20.0 , xlen/2, 8000.0, 2000.0, 2000.0)
+  # FIXME (mfh 2025/03/03) This was originally t = t + ... so perhaps t should also be an input parameter.
+  # On the other hand, t was uninitialized before (which means this was probably incorrect in the original C++).
+  t = sample_ellipse_cosine(x, z,  20.0, xlen/2, 2000.0, 2000.0, 2000.0) + \
+      sample_ellipse_cosine(x, z, -20.0, xlen/2, 8000.0, 2000.0, 2000.0)
 
   return (r, u, w, t, hr, ht)
 
@@ -697,19 +716,20 @@ def hydro_const_theta(z: real): # returns (r, t)
 }
 
 
-//Establish hydrostatic balance using constant Brunt-Vaisala frequency
-//z is the input coordinate
-//bv_freq0 is the constant Brunt-Vaisala frequency
-//r and t are the output background hydrostatic density and potential temperature
-void hydro_const_bvfreq( real z , real bv_freq0 , real &r , real &t ) {
-  const real theta0 = 300.;  //Background potential temperature
-  const real exner0 = 1.;    //Surface-level Exner pressure
-  t = theta0 * exp( bv_freq0*bv_freq0 / grav * z );                                    //Pot temp at z
-  real exner = exner0 - grav*grav / (cp * bv_freq0*bv_freq0) * (t - theta0) / (t * theta0); //Exner pressure at z
-  real p = p0 * pow(exner,(cp/rd));                                                         //Pressure at z
-  real rt = pow((p / C0),(1. / gamm));                                                  //rho*theta at z
-  r = rt / t;                                                                          //Density at z
-}
+# Establish hydrostatic balance using constant Brunt-Vaisala frequency
+# z is the input coordinate
+# bv_freq0 is the constant Brunt-Vaisala frequency (also an input)
+# r and t are the output background hydrostatic density and potential temperature
+def hydro_const_bvfreq(z: real, bv_freq0: real): # returns (r, t)
+  theta0: real = 300.0  # Background potential temperature
+  exner0: real =   1.0  # Surface-level Exner pressure
+  t = theta0 * exp( bv_freq0*bv_freq0 / grav * z )                                     # Pot temp at z
+  exner = exner0 - grav*grav / (cp * bv_freq0*bv_freq0) * (t - theta0) / (t * theta0)  # Exner pressure at z
+  p = p0 * pow(exner,(cp/rd))                                                          # Pressure at z
+  rt = pow((p / C0),(1. / gamm))                                                       # rho*theta at z
+  r = rt / t                                                                           # Density at z
+
+  return (r, t)
 
 
 //Sample from an ellipse of a specified center, radius, and amplitude at a specified location
@@ -831,39 +851,42 @@ void ncwrap( int ierr , int line ) {
 }
 
 
-void finalize() {
-}
+def finalize() -> None:
+  pass
 
 
-//Compute reduced quantities for error checking without resorting to the "ncdiff" tool
-void reductions( realConst3d state , double &mass , double &te , Fixed_data const &fixed_data ) {
-  auto &nx                 = fixed_data.nx                ;
-  auto &nz                 = fixed_data.nz                ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
-  auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
+# Compute reduced quantities for error checking without resorting to the "ncdiff" tool
+#void reductions( realConst3d state , double &mass , double &te , Fixed_data const &fixed_data ) {
+def reductions(
+    state # realConst3d, an input parameter
+    fixed_data # Fixed_data const&, an input parameter
+  ) -> tuple[double, double]: # mass, te
 
-  mass = 0;
-  te   = 0;
-  for (int k=0; k<nz; k++) {
-    for (int i=0; i<nx; i++) {
-      double r  =   state(ID_DENS,hs+k,hs+i) + hy_dens_cell(hs+k);             // Density
-      double u  =   state(ID_UMOM,hs+k,hs+i) / r;                              // U-wind
-      double w  =   state(ID_WMOM,hs+k,hs+i) / r;                              // W-wind
-      double th = ( state(ID_RHOT,hs+k,hs+i) + hy_dens_theta_cell(hs+k) ) / r; // Potential Temperature (theta)
-      double p  = C0*pow(r*th,gamm);                               // Pressure
-      double t  = th / pow(p0/p,rd/cp);                            // Temperature
-      double ke = r*(u*u+w*w);                                     // Kinetic Energy
-      double ie = r*cv*t;                                          // Internal Energy
-      mass += r        *dx*dz; // Accumulate domain mass
-      te   += (ke + ie)*dx*dz; // Accumulate domain total energy
-    }
-  }
-  double glob[2], loc[2];
-  loc[0] = mass;
-  loc[1] = te;
-  int ierr = MPI_Allreduce(loc,glob,2,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);
-  mass = glob[0];
-  te   = glob[1];
-}
+  nx                 = fixed_data.nx                
+  nz                 = fixed_data.nz                
+  hy_dens_cell       = fixed_data.hy_dens_cell      
+  hy_dens_theta_cell = fixed_data.hy_dens_theta_cell
 
+  mass = 0
+  te   = 0
+  for k in range(nz):
+    for i in range(nx):
+      r = state[ID_DENS,hs+k,hs+i] + hy_dens_cell[hs+k]                # Density
+      u = state[ID_UMOM,hs+k,hs+i] / r                                 # U-wind
+      w = state[ID_WMOM,hs+k,hs+i] / r                                 # W-wind
+      th = ( state[ID_RHOT,hs+k,hs+i] + hy_dens_theta_cell[hs+k] ) / r # Potential Temperature (theta)
+      p  = C0*pow(r*th,gamm)                               # Pressure
+      t  = th / pow(p0/p,rd/cp)                            # Temperature
+      ke = r*(u*u+w*w)                                     # Kinetic Energy
+      ie = r*cv*t                                          # Internal Energy
+      mass += r        *dx*dz # Accumulate domain mass
+      te   += (ke + ie)*dx*dz # Accumulate domain total energy
 
+  #double glob[2], loc[2];
+  #loc[0] = mass;
+  #loc[1] = te;
+  #int ierr = MPI_Allreduce(loc,glob,2,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);
+  #mass = glob[0];
+  #te   = glob[1];
+
+  return (mass, te)
