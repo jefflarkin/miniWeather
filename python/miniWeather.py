@@ -76,7 +76,7 @@ nz_glob: int = 50               # Number of total cells in the z-direction
 nx_glob: int = 2 * nz_glob      # Number of total cells in the x-direction
 sim_time: real = 1000.0         # How many seconds to run the simulation
 output_freq: real = 10.0        # How frequently to output data to file (in seconds)
-data_spec_int: int = DATA_SPEC_THERMAL # How to initialize the data
+data_spec_int: int = DATA_SPEC_INJECTION # How to initialize the data
 # ///////////////////////////////////////////////////////////////////////////////////////
 # // END USER-CONFIGURABLE PARAMETERS
 # ///////////////////////////////////////////////////////////////////////////////////////
@@ -114,21 +114,37 @@ def realConst2d(name: str, nx: int, nz: int):
 # ///////////////////////////////////////////////////////////////////////////////////////
 
 class Fixed_data:
-  def __init__(self):
-    self.nx = 0          # Number of local grid cells in the x dimension for this MPI task
-    self.nz = 0          # Number of local grid cells in the z dimension for this MPI task
-    self.i_beg = 0       # beginning index in the x direction for this MPI task
-    self.k_beg = 0       # beginning index in the z direction for this MPI task
-    self.nranks = 0      # Number of MPI ranks
-    self.myrank = 0      # My rank id
-    self.left_rank = 0   # MPI Rank ID that exists to my left in the global domain
-    self.right_rank = 0  # MPI Rank ID that exists to my right in the global domain
-    self.mainproc = True # Am I the main process (rank == 0)?
-    self.hy_dens_cell = None       # realConst1d: hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
-    self.hy_dens_theta_cell = None # realConst1d: hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
-    self.hy_dens_int = None        # realConst1d: hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
-    self.hy_dens_theta_int = None  # realConst1d: hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
-    self.hy_pressure_int = None    # realConst1d: hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
+  def __init__(self,
+    nx: int = 0, # Number of local grid cells in the x dimension for this MPI task
+    nz: int = 0, # Number of local grid cells in the z dimension for this MPI task
+    i_beg: int = 0, # beginning index in the x direction for this MPI task
+    k_beg: int = 0, # beginning index in the z direction for this MPI task
+    nranks: int = 0, # Number of MPI ranks
+    myrank: int = 0, # My rank id
+    left_rank: int = 0, # MPI Rank ID that exists to my left in the global domain
+    right_rank: int = 0, # MPI Rank ID that exists to my right in the global domain
+    mainproc: bool = True, # Am I the main process (rank == 0)?
+    hy_dens_cell = None, # realConst1d: hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
+    hy_dens_theta_cell = None, # realConst1d: hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
+    hy_dens_int = None, # realConst1d: hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
+    hy_dens_theta_int = None, # realConst1d: hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
+    hy_pressure_int = None, # realConst1d:hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
+  ):
+
+    self.nx = nx          
+    self.nz = nz         
+    self.i_beg = i_beg
+    self.k_beg = k_beg
+    self.nranks = nranks
+    self.myrank = myrank
+    self.left_rank = left_rank
+    self.right_rank = right_rank
+    self.mainproc = mainproc
+    self.hy_dens_cell = hy_dens_cell
+    self.hy_dens_theta_cell = hy_dens_theta_cell
+    self.hy_dens_int = hy_dens_int
+    self.hy_dens_theta_int = hy_dens_theta_int
+    self.hy_pressure_int = hy_pressure_int
 
 
 # ///////////////////////////////////////////////////////////////////////////////////////
@@ -141,7 +157,7 @@ def main() -> None:
   # fixed_data: Fixed_data
   # state: real3d
   # dt: real: Model time step (seconds)
-  (fixed_data, state, dt) = init()
+  (state, fixed_data, dt) = init()
 
   mainproc = fixed_data.mainproc
 
@@ -158,7 +174,7 @@ def main() -> None:
   # ////////////////////////////////////////////////////
   # MAIN TIME STEP LOOP
   # ////////////////////////////////////////////////////
-  def run_simulation():
+  def main_time_step_loop(dt: real, etime: real, num_out: int) -> None:
     direction_switch: int = 1  # Order in which dimensional splitting takes x,z solves
     output_counter: real = 0.0 # Helps determine when it's time to do output
 
@@ -179,8 +195,10 @@ def main() -> None:
       if output_freq >= 0 and output_counter >= output_freq:
         output_counter = output_counter - output_freq
       num_out = output(state, etime, num_out, fixed_data)
+      # NOTE (mfh 2025/03/04) etime and num_out will be discarded.
+      # Figure out how to return them from within a timeit expression.
 
-  time_in_s = timeit.timeit(run_simulation(), number=1)
+  time_in_s = timeit.timeit(main_time_step_loop(dt, etime, num_out), number=1)
   if mainproc:
     print(f"CPU Time: {time_in_s} s\n")
 
@@ -337,9 +355,9 @@ def compute_tendencies_x(
       #SArray<real,1,NUM_VARS> d3_vals;
       #SArray<real,1,NUM_VARS> vals;
 
-      stencil = np.zeros((1, 4), dtype=real)
-      d3_vals = np.zeros((1, NUM_VARS), dtype=real)
-      vals = np.zeros((1, NUM_VARS), dtype=real)
+      stencil = np.zeros(4, dtype=real)
+      d3_vals = np.zeros(NUM_VARS, dtype=real)
+      vals = np.zeros(NUM_VARS, dtype=real)
       
       # Use fourth-order interpolation from four cell averages to compute the value at the interface in question
       for ll in range(NUM_VARS):
@@ -606,8 +624,8 @@ def init(): # -> tuple[real3d, real, Fixed_data]:
     for i in range(nx+2*hs):
       # Initialize the state to zero
       for ll in range(NUM_VARS):
-        if mainproc:
-          print(f"ll={ll}, k={k}, i={i}")
+        #if mainproc:
+        #  print(f"ll={ll}, k={k}, i={i}")
         state[ll,k,i] = 0.0
       
       # Use Gauss-Legendre quadrature to initialize a hydrostatic balance + temperature perturbation
@@ -836,7 +854,7 @@ def output(
     fixed_data: Fixed_data
   ) -> int: # num_out (updated)
 
-  if mainproc:
+  if fixed_data.mainproc:
     print("*** OUTPUT ***\n")
 
   # TODO (mfh 2025/03/04) Actually write to the output file.
