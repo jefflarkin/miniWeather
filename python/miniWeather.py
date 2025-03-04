@@ -7,15 +7,12 @@
 # //
 # //////////////////////////////////////////////////////////////////////////////////////////
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <mpi.h>
-#include <ctime>
+import timeit
 #include "const.h"
 #include "pnetcdf.h"
-#include <chrono>
 
-# "Halo" size: number of cells beyond the MPI tasks's domain needed for a full "stencil" of information for reconstruction
+# "Halo" size: number of cells beyond the MPI tasks's domain
+# needed for a full "stencil" of information for reconstruction
 hs: int = 2
 
 # real can be either float or double, depending on cpp/const.h.
@@ -67,61 +64,58 @@ def main() -> None:
   #MPI_Init(&argc,&argv);
   #yakl::init();
 
-  #Fixed_data fixed_data;
-  #real3d state;
-  #real dt;                    //Model time step (seconds)
-
-  # init allocates state
+  # fixed_data: Fixed_data
+  # state: real3d
+  # dt: real: Model time step (seconds)
   (fixed_data, state, dt) = init() # init( state , dt , fixed_data );
 
-  mainproc = fixed_data.mainproc;
+  mainproc = fixed_data.mainproc
 
   # Initial reductions for mass, kinetic energy, and total energy
   (mass0, te0) = reductions(state, fixed_data)
 
-  num_out: int         = 0  # The number of outputs performed so far
-  output_counter: real = 0  # Helps determine when it's time to do output
-  etime: real          = 0
+  num_out: int = 0    # The number of outputs performed so far
+  etime: real  = 0.0  # Elapsed time
 
   # Output the initial state
   if output_freq >= 0:
     num_out = output(state, etime, num_out, fixed_data)
 
-  direction_switch: int = 1 # Tells dimensionally split which order to take x,z solves
-
   # ////////////////////////////////////////////////////
   # MAIN TIME STEP LOOP
   # ////////////////////////////////////////////////////
-  t1 = std::chrono::steady_clock::now()
-  
-  while etime < sim_time:
-    # If the time step leads to exceeding the simulation time, shorten it for the last step
-    if etime + dt > sim_time:
-      dt = sim_time - etime
+  def run_simulation():
+    direction_switch: int = 1  # Order in which dimensional splitting takes x,z solves
+    output_counter: real = 0.0 # Helps determine when it's time to do output
 
-    # Perform a single time step
-    direction_switch = perform_timestep(state, dt, direction_switch, fixed_data)
-    # Inform the user
-    if mainproc:
-      print( "Elapsed Time: %lf / %lf\n", etime , sim_time )
-    # Update the elapsed time and output counter
-    etime = etime + dt
-    output_counter = output_counter + dt
-    # If it's time for output, reset the counter, and do output
-    if output_freq >= 0 and output_counter >= output_freq:
-      output_counter = output_counter - output_freq
+    while etime < sim_time:
+      # If the time step leads to exceeding the simulation time, shorten it for the last step
+      if etime + dt > sim_time:
+        dt = sim_time - etime
+
+      # Perform a single time step
+      direction_switch = perform_timestep(state, dt, direction_switch, fixed_data)
+      # Inform the user
+      if mainproc:
+        print(f"Elapsed Time: {etime}, Simulation Time: {sim_time}\n")
+      # Update the elapsed time and output counter
+      etime = etime + dt
+      output_counter = output_counter + dt
+      # If it's time for output, reset the counter, and do output
+      if output_freq >= 0 and output_counter >= output_freq:
+        output_counter = output_counter - output_freq
       num_out = output(state, etime, num_out, fixed_data)
 
-  auto t2 = std::chrono::steady_clock::now();
+  time_in_s = timeit.timeit(run_simulation(), number=1)
   if mainproc:
-    print( "CPU Time: " << std::chrono::duration<double>(t2-t1).count() << " sec\n" )
+    print(f"CPU Time: {time_in_s} s\n")
 
   # Final reductions for mass, kinetic energy, and total energy
   (mass, te) = reductions(state, fixed_data)
 
   if mainproc:
-    print( "d_mass: %le\n" % ((mass - mass0)/mass0) )
-    print( "d_te:   %le\n" % ((te   - te0  )/te0  ) )
+    print( f"d_mass: {((mass - mass0)/mass0)}" )
+    print( f"d_te:   {((te   - te0  )/te0  )}" )
 
   finalize()
 
