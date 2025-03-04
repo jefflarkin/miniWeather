@@ -7,23 +7,41 @@
 # //
 # //////////////////////////////////////////////////////////////////////////////////////////
 
+import math
+import numpy as np
 import sys
 import timeit
-import numpy as np
 #include "pnetcdf.h"
 
 # "real" in the original C++ code could be either float or double.
 real = np.float64 # or np.float32
+double = np.float64
+
+#
+# Parameters for indexing and flags
+# (effectively enums, but we leave them as constants
+# so it's easier to see the relationship to the original C++)
+#
+
+NUM_VARS: int = 4           # Number of fluid state variables
+ID_DENS: int = 0           #index for density ("rho")
+ID_UMOM: int = 1           #index for momentum in the x-direction ("rho * u")
+ID_WMOM: int = 2           #index for momentum in the z-direction ("rho * w")
+ID_RHOT: int = 3           #index for density * potential temperature ("rho * theta")
+DIR_X: int = 1              #Integer constant to express that this operation is in the x-direction
+DIR_Z: int = 2              #Integer constant to express that this operation is in the z-direction
+DATA_SPEC_COLLISION: int = 1
+DATA_SPEC_THERMAL: int = 2
+DATA_SPEC_GRAVITY_WAVES: int = 3
+DATA_SPEC_DENSITY_CURRENT: int = 5
+DATA_SPEC_INJECTION: int = 6
 
 #
 # Constants (ported from cpp/const.h)
 #
 
-hs: int = 2
-
-# We don't like code that redefines pi,
-# but we keep it just for now, to test that
-# the Python gives the same results as the C++.
+# We don't like code that redefines pi, but we keep it for now,
+# to test that the Python gives the same results as the C++.
 pi: real   = 3.14159265358979323846264338327
 grav: real = 9.8     # Gravitational acceleration (m / s^2)
 cp: real   = 1004.0  # Specific heat of dry air at constant pressure
@@ -54,61 +72,41 @@ sten_size: int = 4
 # ///////////////////////////////////////////////////////////////////////////////////////
 # The x-direction length is twice as long as the z-direction length
 # So, you'll want to have nx_glob be twice as large as nz_glob
-nx_glob: int = _NX              # Number of total cells in the x-direction
-nz_glob: int = _NZ              # Number of total cells in the z-direction
-sim_time: real = _SIM_TIME      # How many seconds to run the simulation
-output_freq: real = _OUT_FREQ   # How frequently to output data to file (in seconds)
-data_spec_int: int = _DATA_SPEC # How to initialize the data
+nz_glob: int = 50               # Number of total cells in the z-direction
+nx_glob: int = 2 * nz_glob      # Number of total cells in the x-direction
+sim_time: real = 1000.0         # How many seconds to run the simulation
+output_freq: real = 10.0        # How frequently to output data to file (in seconds)
+data_spec_int: int = DATA_SPEC_THERMAL # How to initialize the data
 # ///////////////////////////////////////////////////////////////////////////////////////
 # // END USER-CONFIGURABLE PARAMETERS
 # ///////////////////////////////////////////////////////////////////////////////////////
 dx: real = xlen / nx_glob
 dz: real = zlen / nz_glob
 
-
-#
-# Parameters for indexing and flags
-#
-
-NUM_VARS: int = 4           # Number of fluid state variables
-ID_DENS: int = 0           #index for density ("rho")
-ID_UMOM: int = 1           #index for momentum in the x-direction ("rho * u")
-ID_WMOM: int = 2           #index for momentum in the z-direction ("rho * w")
-ID_RHOT: int = 3           #index for density * potential temperature ("rho * theta")
-DIR_X: int = 1              #Integer constant to express that this operation is in the x-direction
-DIR_Z: int = 2              #Integer constant to express that this operation is in the z-direction
-DATA_SPEC_COLLISION: int = 1
-DATA_SPEC_THERMAL: int = 2
-DATA_SPEC_GRAVITY_WAVES: int = 3
-DATA_SPEC_DENSITY_CURRENT: int = 5
-DATA_SPEC_INJECTION: int = 6
-
 #
 # These functions aid in porting from the original C++.
+# Not sure why the degrees of freedom are in reverse order;
+# perhaps the original author wanted to preserve Fortran order.
 #
 
 #typedef yakl::Array<real  ,1,yakl::memHost> real1d;
-def real1d(name: string, nx: int):
+def real1d(name: str, nx: int):
   return np.zeros(nx, dtype=real)
 
-#typedef yakl::Array<real  ,2,yakl::memHost> real2d;
-def real2d(name: string, nx: int, nz: int):
-  return np.zeros((nz, nx), dtype=real)
-
 #typedef yakl::Array<real  ,3,yakl::memHost> real3d;
-def real3d(name: string, nx: int, nz: int, nvars: int):
+def real3d(name: str, nx: int, nz: int, nvars: int):
   return np.zeros((nvars, nz, nx), dtype=real)
 
 #typedef yakl::Array<double,2,yakl::memHost> doub2d;
-def doub2d(name: string, nx: int, nz: int):
+def doub2d(name: str, nx: int, nz: int):
   return np.zeros((nz, nx), dtype=real)
 
 #typedef yakl::Array<real   const,1,yakl::memHost> realConst1d;
-def realConst1d(name: string, nx: int):
+def realConst1d(name: str, nx: int):
   return np.zeros(nx, dtype=real)
 
 #typedef yakl::Array<real   const,2,yakl::memHost> realConst2d;
-def realConst2d(name: string, nx: int, nz: int):
+def realConst2d(name: str, nx: int, nz: int):
   return np.zeros((nz, nx), dtype=real)
 
 # ///////////////////////////////////////////////////////////////////////////////////////
@@ -216,7 +214,7 @@ def perform_timestep(
   nx = fixed_data.nx
   nz = fixed_data.nz
 
-  state_tmp = real3d("state_tmp", NUM_VARS, nz+2*hs, nx+2*hs)
+  state_tmp = real3d("state_tmp", nx=nx+2*hs, nz=nz+2*hs, nvars=NUM_VARS)
 
   if direction_switch != 0:
     # x-direction first
@@ -264,7 +262,7 @@ def semi_discrete_step(
   k_beg              = fixed_data.k_beg
   hy_dens_cell       = fixed_data.hy_dens_cell
 
-  tend = real3d("tend", NUM_VARS, nz, nx)
+  tend = real3d("tend", nx=nx, nz=nz, nvars=NUM_VARS)
 
   if dir == DIR_X:
     # Set the halo values for this MPI task's fluid state in the x-direction
@@ -299,7 +297,7 @@ def semi_discrete_step(
           wpert: real = sample_ellipse_cosine(x, z, 0.01, xlen/8, 1000.0, 500.0, 500.0)
           tend[ID_WMOM,k,i] += wpert*hy_dens_cell[hs+k]
 
-        state_out(ll,hs+k,hs+i) = state_init(ll,hs+k,hs+i) + dt * tend(ll,k,i);
+        state_out[ll,hs+k,hs+i] = state_init[ll,hs+k,hs+i] + dt * tend[ll,k,i]
 
   # yakl::timer_stop("apply tendencies");
 
@@ -323,7 +321,7 @@ def compute_tendencies_x(
   hy_dens_cell       = fixed_data.hy_dens_cell
   hy_dens_theta_cell = fixed_data.hy_dens_theta_cell
 
-  flux = real3d("flux", NUM_VARS, nz, nx+1)
+  flux = real3d("flux", nx=nx+1, nz=nz, nvars=NUM_VARS)
 
   # Compute the hyperviscosity coefficient
   hv_coef: real = -hv_beta * dx / (16*dt)
@@ -396,7 +394,7 @@ def compute_tendencies_z(
   hy_dens_theta_int  = fixed_data.hy_dens_theta_int
   hy_pressure_int    = fixed_data.hy_pressure_int
 
-  flux = real3d("flux", NUM_VARS, nz+1, nx)
+  flux = real3d("flux", nx=nx, nz=nz+1, nvars=NUM_VARS)
 
   # Compute the hyperviscosity coefficient
   hv_coef: real = -hv_beta * dz / (16*dt);
@@ -411,9 +409,9 @@ def compute_tendencies_z(
       #SArray<real,1,NUM_VARS> d3_vals;
       #SArray<real,1,NUM_VARS> vals;
 
-      stencil = np.zeros((1, 4), dtype=real)
-      d3_vals = np.zeros((1, NUM_VARS), dtype=real)
-      vals = np.zeros((1, NUM_VARS), dtype=real)
+      stencil = np.zeros(4, dtype=real)
+      d3_vals = np.zeros(NUM_VARS, dtype=real)
+      vals = np.zeros(NUM_VARS, dtype=real)
 
       # Use fourth-order interpolation from four cell averages to compute the value at the interface in question
       for ll in range(NUM_VARS):
@@ -440,8 +438,6 @@ def compute_tendencies_z(
       flux[ID_UMOM,k,i] = r*w*u   - hv_coef*d3_vals[ID_UMOM];
       flux[ID_WMOM,k,i] = r*w*w+p - hv_coef*d3_vals[ID_WMOM];
       flux[ID_RHOT,k,i] = r*w*t   - hv_coef*d3_vals[ID_RHOT];
-    }
-  }
 
   # Use the fluxes to compute tendencies for each cell
   #/////////////////////////////////////////////////
@@ -571,7 +567,9 @@ def init(): # -> tuple[real3d, real, Fixed_data]:
   mainproc = (myrank == 0)
 
   # Allocate the model data
-  state = real3d("state", NUM_VARS, nz+2*hs, nx+2*hs)
+  state = real3d("state", nx=nx+2*hs, nz=nz+2*hs, nvars=NUM_VARS)
+  if mainproc:
+    print(f"Allocate state: NUM_VARS={NUM_VARS}, nx+2*hs={nx+2*hs}, nz+2*hs={nz+2*hs}")
 
   # Define the maximum stable time step based on an assumed maximum wind speed
   dt: real = min(dx,dz) / max_speed * cfl;
@@ -608,6 +606,8 @@ def init(): # -> tuple[real3d, real, Fixed_data]:
     for i in range(nx+2*hs):
       # Initialize the state to zero
       for ll in range(NUM_VARS):
+        if mainproc:
+          print(f"ll={ll}, k={k}, i={i}")
         state[ll,k,i] = 0.0
       
       # Use Gauss-Legendre quadrature to initialize a hydrostatic balance + temperature perturbation
@@ -688,11 +688,11 @@ def init(): # -> tuple[real3d, real, Fixed_data]:
     hy_dens_theta_int[k] = hr*ht
     hy_pressure_int[k]   = C0*pow((hr*ht), gamm)
 
-  hy_dens_cell       = realConst1d(hy_dens_cell      )
-  hy_dens_theta_cell = realConst1d(hy_dens_theta_cell)
-  hy_dens_int        = realConst1d(hy_dens_int       )
-  hy_dens_theta_int  = realConst1d(hy_dens_theta_int )
-  hy_pressure_int    = realConst1d(hy_pressure_int   )
+  hy_dens_cell       = realConst1d("hy_dens_cell      ", nz+2*hs)
+  hy_dens_theta_cell = realConst1d("hy_dens_theta_cell", nz+2*hs)
+  hy_dens_int        = realConst1d("hy_dens_int       ", nz+1)
+  hy_dens_theta_int  = realConst1d("hy_dens_theta_int ", nz+1)
+  hy_pressure_int    = realConst1d("hy_pressure_int   ", nz+1)
 
   fixed_data = Fixed_data(nx, nz, i_beg, k_beg,
     nranks, myrank, left_rank, right_rank, mainproc,
@@ -794,7 +794,7 @@ def hydro_const_theta(z: real): # returns (r, t)
   r = rt / t                                  # Density at z
 
   return (r, t)
-}
+
 
 
 # Establish hydrostatic balance using constant Brunt-Vaisala frequency
@@ -818,10 +818,10 @@ def hydro_const_bvfreq(z: real, bv_freq0: real): # returns (r, t)
 # amp,x0,z0,xrad,zrad are input amplitude, center, and radius of the ellipse
 def sample_ellipse_cosine(x: real, z: real, amp: real, x0: real, z0: real, xrad: real, zrad: real) -> real:
   # Compute distance from bubble center
-  dist: real = sqrt( ((x-x0)/xrad)*((x-x0)/xrad) + ((z-z0)/zrad)*((z-z0)/zrad) ) * pi / 2.0
+  dist: real = math.sqrt( ((x-x0)/xrad)*((x-x0)/xrad) + ((z-z0)/zrad)*((z-z0)/zrad) ) * pi / 2.0
   # If the distance from bubble center is less than the radius, create a cos**2 profile
   if dist <= pi / 2.0:
-    return amp * pow(cos(dist),2.)
+    return amp * math.pow(math.cos(dist), 2.0)
   else:
     return 0.0
 
@@ -831,9 +831,9 @@ def sample_ellipse_cosine(x: real, z: real, amp: real, x0: real, z0: real, xrad:
 # If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
 def output(
     state, # realConst3d
-    etime, # real
-    num_out, # int
-    fixed_data # Fixed_data const&
+    etime: real,
+    num_out: int,
+    fixed_data: Fixed_data
   ) -> int: # num_out (updated)
 
   if mainproc:
@@ -841,10 +841,7 @@ def output(
 
   # TODO (mfh 2025/03/04) Actually write to the output file.
 
-  # Increment the number of outputs
-  num_out = num_out + 1;
-
-  return num_out
+  return num_out + 1
 
 
 def finalize() -> None:
@@ -854,7 +851,7 @@ def finalize() -> None:
 # Compute reduced quantities for error checking without resorting to the "ncdiff" tool
 #void reductions( realConst3d state , double &mass , double &te , Fixed_data const &fixed_data ) {
 def reductions(
-    state # realConst3d, an input parameter
+    state, # realConst3d, an input parameter
     fixed_data # Fixed_data const&, an input parameter
   ) -> tuple[double, double]: # mass, te
 
@@ -886,3 +883,7 @@ def reductions(
   #te   = glob[1];
 
   return (mass, te)
+
+
+if __name__ == "__main__":
+  main()
