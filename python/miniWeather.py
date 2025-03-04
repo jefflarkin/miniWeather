@@ -60,78 +60,73 @@ struct Fixed_data {
   realConst1d hy_pressure_int;     //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
 };
 
-///////////////////////////////////////////////////////////////////////////////////////
-// THE MAIN PROGRAM STARTS HERE
-///////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char **argv) {
+# ///////////////////////////////////////////////////////////////////////////////////////
+# // THE MAIN PROGRAM STARTS HERE
+# ///////////////////////////////////////////////////////////////////////////////////////
+def main() -> None:
   #MPI_Init(&argc,&argv);
   #yakl::init();
-  {
-    #Fixed_data fixed_data;
-    #real3d state;
-    #real dt;                    //Model time step (seconds)
 
-    # init allocates state
-    (fixed_data, state, dt) = init() # init( state , dt , fixed_data );
+  #Fixed_data fixed_data;
+  #real3d state;
+  #real dt;                    //Model time step (seconds)
 
-    auto &mainproc = fixed_data.mainproc;
+  # init allocates state
+  (fixed_data, state, dt) = init() # init( state , dt , fixed_data );
 
-    //Initial reductions for mass, kinetic energy, and total energy
-    double mass0, te0;
-    reductions(state,mass0,te0,fixed_data);
+  mainproc = fixed_data.mainproc;
 
-    int  num_out = 0;          //The number of outputs performed so far
-    real output_counter = 0;   //Helps determine when it's time to do output
-    real etime = 0;
+  # Initial reductions for mass, kinetic energy, and total energy
+  (mass0, te0) = reductions(state, fixed_data)
 
-    //Output the initial state
-    if (output_freq >= 0) {
-      output(state,etime,num_out,fixed_data);
-    }
+  num_out: int         = 0  # The number of outputs performed so far
+  output_counter: real = 0  # Helps determine when it's time to do output
+  etime: real          = 0
 
-    int direction_switch = 1;  // Tells dimensionally split which order to take x,z solves
+  # Output the initial state
+  if output_freq >= 0:
+    num_out = output(state, etime, num_out, fixed_data)
 
-    ////////////////////////////////////////////////////
-    // MAIN TIME STEP LOOP
-    ////////////////////////////////////////////////////
-    auto t1 = std::chrono::steady_clock::now();
-    while (etime < sim_time) {
-      //If the time step leads to exceeding the simulation time, shorten it for the last step
-      if (etime + dt > sim_time) { dt = sim_time - etime; }
-      # Perform a single time step
-      direction_switch = perform_timestep(state, dt, direction_switch, fixed_data)
-      //Inform the user
-      #ifndef NO_INFORM
-        if (mainproc) { printf( "Elapsed Time: %lf / %lf\n", etime , sim_time ); }
-      #endif
-      //Update the elapsed time and output counter
-      etime = etime + dt;
-      output_counter = output_counter + dt;
-      //If it's time for output, reset the counter, and do output
-      if (output_freq >= 0 && output_counter >= output_freq) {
-        output_counter = output_counter - output_freq;
-        output(state,etime,num_out,fixed_data);
-      }
-    }
-    auto t2 = std::chrono::steady_clock::now();
-    if (mainproc) {
-      std::cout << "CPU Time: " << std::chrono::duration<double>(t2-t1).count() << " sec\n";
-    }
+  direction_switch: int = 1 # Tells dimensionally split which order to take x,z solves
 
-    //Final reductions for mass, kinetic energy, and total energy
-    double mass, te;
-    reductions(state,mass,te,fixed_data);
+  # ////////////////////////////////////////////////////
+  # MAIN TIME STEP LOOP
+  # ////////////////////////////////////////////////////
+  t1 = std::chrono::steady_clock::now()
+  
+  while etime < sim_time:
+    # If the time step leads to exceeding the simulation time, shorten it for the last step
+    if etime + dt > sim_time:
+      dt = sim_time - etime
 
+    # Perform a single time step
+    direction_switch = perform_timestep(state, dt, direction_switch, fixed_data)
+    # Inform the user
     if mainproc:
-      print( "d_mass: %le\n" % ((mass - mass0)/mass0) )
-      print( "d_te:   %le\n" % ((te   - te0  )/te0  ) )
+      print( "Elapsed Time: %lf / %lf\n", etime , sim_time )
+    # Update the elapsed time and output counter
+    etime = etime + dt
+    output_counter = output_counter + dt
+    # If it's time for output, reset the counter, and do output
+    if output_freq >= 0 and output_counter >= output_freq:
+      output_counter = output_counter - output_freq
+      num_out = output(state, etime, num_out, fixed_data)
 
-    finalize()
-  }
+  auto t2 = std::chrono::steady_clock::now();
+  if mainproc:
+    print( "CPU Time: " << std::chrono::duration<double>(t2-t1).count() << " sec\n" )
+
+  # Final reductions for mass, kinetic energy, and total energy
+  (mass, te) = reductions(state, fixed_data)
+
+  if mainproc:
+    print( "d_mass: %le\n" % ((mass - mass0)/mass0) )
+    print( "d_te:   %le\n" % ((te   - te0  )/te0  ) )
+
+  finalize()
 
   # yakl::finalize();
   # MPI_Finalize();
-}
 
 
 # Performs a single dimensionally split time step using a simple low-storage three-stage Runge-Kutta time integrator
@@ -151,26 +146,26 @@ def perform_timestep(
   nx = fixed_data.nx
   nz = fixed_data.nz
 
-  state_tmp = real3d("state_tmp", NUM_VARS, nz+2*hs, nx+2*hs);
+  state_tmp = real3d("state_tmp", NUM_VARS, nz+2*hs, nx+2*hs)
 
   if direction_switch != 0:
     # x-direction first
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_X , fixed_data )
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , DIR_X , fixed_data )
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , DIR_X , fixed_data )
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, fixed_data)
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, fixed_data)
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_X, fixed_data)
     # z-direction second
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_Z , fixed_data )
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , DIR_Z , fixed_data )
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , DIR_Z , fixed_data )
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_Z, fixed_data)
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_Z, fixed_data)
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_Z, fixed_data)
   else:
     # z-direction second
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_Z , fixed_data )
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , DIR_Z , fixed_data )
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , DIR_Z , fixed_data )
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_Z, fixed_data)
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_Z, fixed_data)
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_Z, fixed_data)
     # x-direction first
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_X , fixed_data )
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , DIR_X , fixed_data )
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , DIR_X , fixed_data )
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, fixed_data)
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, fixed_data)
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_X, fixed_data)
 
   if direction_switch:
     direction_switch = 0
@@ -181,37 +176,44 @@ def perform_timestep(
 
 
 
-//Perform a single semi-discretized step in time with the form:
-//state_out = state_init + dt * rhs(state_forcing)
-//Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
-void semi_discrete_step( realConst3d state_init , real3d const &state_forcing , real3d const &state_out , real dt , int dir , Fixed_data const &fixed_data ) {
-  auto &nx                 = fixed_data.nx                ;
-  auto &nz                 = fixed_data.nz                ;
-  auto &i_beg              = fixed_data.i_beg             ;
-  auto &k_beg              = fixed_data.k_beg             ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
+# Perform a single semi-discretized step in time with the form:
+# state_out = state_init + dt * rhs(state_forcing)
+# Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
+def semi_discrete_step(
+    state_init, # realConst3d
+    state_forcing, # real3d const&
+    state_out, # real3d const&,
+    dt: real,
+    dir: int,
+    fixed_data # Fixed_data const&
+  ) -> None:
 
-  tend = real3d("tend", NUM_VARS, nz, nx);
+  nx                 = fixed_data.nx
+  nz                 = fixed_data.nz
+  i_beg              = fixed_data.i_beg
+  k_beg              = fixed_data.k_beg
+  hy_dens_cell       = fixed_data.hy_dens_cell
 
-  if        (dir == DIR_X) {
-    //Set the halo values for this MPI task's fluid state in the x-direction
-    yakl::timer_start("halo x");
-    set_halo_values_x(state_forcing,fixed_data);
-    yakl::timer_stop("halo x");
-    //Compute the time tendencies for the fluid state in the x-direction
-    yakl::timer_start("tendencies x");
-    compute_tendencies_x(state_forcing,tend,dt,fixed_data);
-    yakl::timer_stop("tendencies x");
-  } else if (dir == DIR_Z) {
-    //Set the halo values for this MPI task's fluid state in the z-direction
-    yakl::timer_start("halo z");
-    set_halo_values_z(state_forcing,fixed_data);
-    yakl::timer_stop("halo z");
-    //Compute the time tendencies for the fluid state in the z-direction
-    yakl::timer_start("tendencies z");
-    compute_tendencies_z(state_forcing,tend,dt,fixed_data);
-    yakl::timer_stop("tendencies z");
-  }
+  tend = real3d("tend", NUM_VARS, nz, nx)
+
+  if dir == DIR_X:
+    # Set the halo values for this MPI task's fluid state in the x-direction
+    #yakl::timer_start("halo x");
+    set_halo_values_x(state_forcing, fixed_data)
+    #yakl::timer_stop("halo x");
+    # Compute the time tendencies for the fluid state in the x-direction
+    #yakl::timer_start("tendencies x");
+    compute_tendencies_x(state_forcing, tend, dt, fixed_data)
+    #yakl::timer_stop("tendencies x");
+  elif dir == DIR_Z:
+    # Set the halo values for this MPI task's fluid state in the z-direction
+    #yakl::timer_start("halo z");
+    set_halo_values_z(state_forcing, fixed_data)
+    #yakl::timer_stop("halo z");
+    # Compute the time tendencies for the fluid state in the z-direction
+    #yakl::timer_start("tendencies z");
+    compute_tendencies_z(state_forcing, tend, dt, fixed_data)
+    #yakl::timer_stop("tendencies z");
 
   # /////////////////////////////////////////////////
   # // TODO: MAKE THESE 3 LOOPS A PARALLEL_FOR
@@ -231,154 +233,174 @@ void semi_discrete_step( realConst3d state_init , real3d const &state_forcing , 
 
   # yakl::timer_stop("apply tendencies");
 
-  # FIXME (mfh 2025/03/03) This should return something; not sure what yet
+  # NOTE It's OK for this not to return anything,
+  # as long as we can treat state_out as an output parameter.
 
 
-//Compute the time tendencies of the fluid state using forcing in the x-direction
-//Since the halos are set in a separate routine, this will not require MPI
-//First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
-//Then, compute the tendencies using those fluxes
-void compute_tendencies_x( realConst3d state , real3d const &tend , real dt , Fixed_data const &fixed_data ) {
-  auto &nx                 = fixed_data.nx                ;
-  auto &nz                 = fixed_data.nz                ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
-  auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
+# Compute the time tendencies of the fluid state using forcing in the x-direction
+# Since the halos are set in a separate routine, this will not require MPI
+# First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
+# Then, compute the tendencies using those fluxes
+def compute_tendencies_x(
+    state, # realConst3d
+    tend, # real3d const&
+    dt, # real
+    fixed_data # Fixed_data const&
+  ) -> None:
 
-  flux = real3d("flux", NUM_VARS, nz, nx+1);
+  nx                 = fixed_data.nx
+  nz                 = fixed_data.nz
+  hy_dens_cell       = fixed_data.hy_dens_cell
+  hy_dens_theta_cell = fixed_data.hy_dens_theta_cell
 
-  //Compute the hyperviscosity coefficient
-  real hv_coef = -hv_beta * dx / (16*dt);
-  /////////////////////////////////////////////////
-  // TODO: MAKE THESE 2 LOOPS A PARALLEL_FOR
-  /////////////////////////////////////////////////
-  //Compute fluxes in the x-direction for each cell
-  for (int k=0; k<nz; k++) {
-    for (int i=0; i<nx+1; i++) {
-      SArray<real,1,4> stencil;
-      SArray<real,1,NUM_VARS> d3_vals;
-      SArray<real,1,NUM_VARS> vals;
-      //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
-      for (int ll=0; ll<NUM_VARS; ll++) {
-        for (int s=0; s < sten_size; s++) {
-          stencil(s) = state(ll,hs+k,i+s);
-        }
-        //Fourth-order-accurate interpolation of the state
-        vals(ll) = -stencil(0)/12 + 7*stencil(1)/12 + 7*stencil(2)/12 - stencil(3)/12;
-        //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
-        d3_vals(ll) = -stencil(0) + 3*stencil(1) - 3*stencil(2) + stencil(3);
-      }
+  flux = real3d("flux", NUM_VARS, nz, nx+1)
 
-      //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-      real r = vals(ID_DENS) + hy_dens_cell(hs+k);
-      real u = vals(ID_UMOM) / r;
-      real w = vals(ID_WMOM) / r;
-      real t = ( vals(ID_RHOT) + hy_dens_theta_cell(hs+k) ) / r;
-      real p = C0*pow((r*t),gamm);
+  # Compute the hyperviscosity coefficient
+  hv_coef: real = -hv_beta * dx / (16*dt)
+  # /////////////////////////////////////////////////
+  # TODO: MAKE THESE 2 LOOPS A PARALLEL_FOR
+  # /////////////////////////////////////////////////
+  # Compute fluxes in the x-direction for each cell
+  for k in range(nz):
+    for i in range(nx+1):
 
-      //Compute the flux vector
-      flux(ID_DENS,k,i) = r*u     - hv_coef*d3_vals(ID_DENS);
-      flux(ID_UMOM,k,i) = r*u*u+p - hv_coef*d3_vals(ID_UMOM);
-      flux(ID_WMOM,k,i) = r*u*w   - hv_coef*d3_vals(ID_WMOM);
-      flux(ID_RHOT,k,i) = r*u*t   - hv_coef*d3_vals(ID_RHOT);
-    }
-  }
+      # "Stack Array" -- local multidimensional array type with compile-time extents
+      #SArray<real,1,4> stencil;
+      #SArray<real,1,NUM_VARS> d3_vals;
+      #SArray<real,1,NUM_VARS> vals;
 
-  /////////////////////////////////////////////////
-  // TODO: MAKE THESE 3 LOOPS A PARALLEL_FOR
-  /////////////////////////////////////////////////
-  //Use the fluxes to compute tendencies for each cell
-  for (int ll=0; ll<NUM_VARS; ll++) {
-    for (int k=0; k<nz; k++) {
-      for (int i=0; i<nx; i++) {
-        tend(ll,k,i) = -( flux(ll,k,i+1) - flux(ll,k,i) ) / dx;
-      }
-    }
-  }
-}
+      stencil = np.zeros((1, 4), dtype=real)
+      d3_vals = np.zeros((1, NUM_VARS), dtype=real)
+      vals = np.zeros((1, NUM_VARS), dtype=real)
+      
+      # Use fourth-order interpolation from four cell averages to compute the value at the interface in question
+      for ll in range(NUM_VARS):
+        for s in range(sten_size):
+          stencil[s] = state[ll,hs+k,i+s]
+
+        # Fourth-order-accurate interpolation of the state
+        vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12
+        # First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
+        d3_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3]
+
+      # Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
+      r = vals[ID_DENS] + hy_dens_cell[hs+k]
+      u = vals[ID_UMOM] / r
+      w = vals[ID_WMOM] / r
+      t = (vals[ID_RHOT] + hy_dens_theta_cell[hs+k]) / r
+      p = C0*pow((r*t), gamm)
+
+      # Compute the flux vector
+      flux[ID_DENS,k,i] = r*u     - hv_coef*d3_vals[ID_DENS]
+      flux[ID_UMOM,k,i] = r*u*u+p - hv_coef*d3_vals[ID_UMOM]
+      flux[ID_WMOM,k,i] = r*u*w   - hv_coef*d3_vals[ID_WMOM]
+      flux[ID_RHOT,k,i] = r*u*t   - hv_coef*d3_vals[ID_RHOT]
+
+  # /////////////////////////////////////////////////
+  # // TODO: MAKE THESE 3 LOOPS A PARALLEL_FOR
+  # /////////////////////////////////////////////////
+  # Use the fluxes to compute tendencies for each cell
+  for ll in range(NUM_VARS):
+    for k in range(nz):
+      for i in range(nx):
+        tend[ll,k,i] = -( flux[ll,k,i+1] - flux[ll,k,i] ) / dx
+
+  # NOTE It's OK for this not to return anything,
+  # as long as we can treat tend as an output parameter.
 
 
-//Compute the time tendencies of the fluid state using forcing in the z-direction
-//Since the halos are set in a separate routine, this will not require MPI
-//First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
-//Then, compute the tendencies using those fluxes
-void compute_tendencies_z( realConst3d state , real3d const &tend , real dt , Fixed_data const &fixed_data ) {
-  auto &nx                 = fixed_data.nx                ;
-  auto &nz                 = fixed_data.nz                ;
-  auto &hy_dens_int        = fixed_data.hy_dens_int       ;
-  auto &hy_dens_theta_int  = fixed_data.hy_dens_theta_int ;
-  auto &hy_pressure_int    = fixed_data.hy_pressure_int   ;
+# Compute the time tendencies of the fluid state using forcing in the z-direction
+# Since the halos are set in a separate routine, this will not require MPI
+# First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
+# Then, compute the tendencies using those fluxes
+def compute_tendencies_z(
+    state, # realConst3d
+    tend, # real3d const&
+    dt, # real
+    fixed_data # Fixed_data const&
+  ) -> None:
 
-  flux = real3d("flux", NUM_VARS, nz+1, nx);
+  nx                 = fixed_data.nx
+  nz                 = fixed_data.nz
+  hy_dens_int        = fixed_data.hy_dens_int
+  hy_dens_theta_int  = fixed_data.hy_dens_theta_int
+  hy_pressure_int    = fixed_data.hy_pressure_int
 
-  //Compute the hyperviscosity coefficient
-  real hv_coef = -hv_beta * dz / (16*dt);
-  /////////////////////////////////////////////////
-  // TODO: MAKE THESE 2 LOOPS A PARALLEL_FOR
-  /////////////////////////////////////////////////
-  //Compute fluxes in the x-direction for each cell
-  for (int k=0; k<nz+1; k++) {
-    for (int i=0; i<nx; i++) {
-      SArray<real,1,4> stencil;
-      SArray<real,1,NUM_VARS> d3_vals;
-      SArray<real,1,NUM_VARS> vals;
-      //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
-      for (int ll=0; ll<NUM_VARS; ll++) {
-        for (int s=0; s<sten_size; s++) {
-          stencil(s) = state(ll,k+s,hs+i);
-        }
-        //Fourth-order-accurate interpolation of the state
-        vals(ll) = -stencil(0)/12 + 7*stencil(1)/12 + 7*stencil(2)/12 - stencil(3)/12;
-        //First-order-accurate interpolation of the third spatial derivative of the state
-        d3_vals(ll) = -stencil(0) + 3*stencil(1) - 3*stencil(2) + stencil(3);
-      }
+  flux = real3d("flux", NUM_VARS, nz+1, nx)
 
-      //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-      real r = vals(ID_DENS) + hy_dens_int(k);
-      real u = vals(ID_UMOM) / r;
-      real w = vals(ID_WMOM) / r;
-      real t = ( vals(ID_RHOT) + hy_dens_theta_int(k) ) / r;
-      real p = C0*pow((r*t),gamm) - hy_pressure_int(k);
-      if (k == 0 || k == nz) {
+  # Compute the hyperviscosity coefficient
+  hv_coef: real = -hv_beta * dz / (16*dt);
+  # /////////////////////////////////////////////////
+  # TODO: MAKE THESE 2 LOOPS A PARALLEL_FOR
+  # /////////////////////////////////////////////////
+  # Compute fluxes in the x-direction for each cell
+  for k in range(nz+1):
+    for i in range(nx):
+      # "Stack Array" -- local multidimensional array type with compile-time extents
+      #SArray<real,1,4> stencil;
+      #SArray<real,1,NUM_VARS> d3_vals;
+      #SArray<real,1,NUM_VARS> vals;
+
+      stencil = np.zeros((1, 4), dtype=real)
+      d3_vals = np.zeros((1, NUM_VARS), dtype=real)
+      vals = np.zeros((1, NUM_VARS), dtype=real)
+
+      # Use fourth-order interpolation from four cell averages to compute the value at the interface in question
+      for ll in range(NUM_VARS):
+        for s in range(sten_size):
+          stencil[s] = state[ll,k+s,hs+i];
+
+        # Fourth-order-accurate interpolation of the state
+        vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12
+        # First-order-accurate interpolation of the third spatial derivative of the state
+        d3_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3]
+
+      # Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
+      r: real = vals[ID_DENS] + hy_dens_int[k];
+      u: real = vals[ID_UMOM] / r;
+      w: real = vals[ID_WMOM] / r;
+      t: real = ( vals[ID_RHOT] + hy_dens_theta_int[k] ) / r;
+      p: real = C0*pow((r*t),gamm) - hy_pressure_int[k];
+      if k == 0 or k == nz:
         w                = 0;
-        d3_vals(ID_DENS) = 0;
-      }
+        d3_vals[ID_DENS] = 0;
 
-      //Compute the flux vector with hyperviscosity
-      flux(ID_DENS,k,i) = r*w     - hv_coef*d3_vals(ID_DENS);
-      flux(ID_UMOM,k,i) = r*w*u   - hv_coef*d3_vals(ID_UMOM);
-      flux(ID_WMOM,k,i) = r*w*w+p - hv_coef*d3_vals(ID_WMOM);
-      flux(ID_RHOT,k,i) = r*w*t   - hv_coef*d3_vals(ID_RHOT);
+      # Compute the flux vector with hyperviscosity
+      flux[ID_DENS,k,i] = r*w     - hv_coef*d3_vals[ID_DENS];
+      flux[ID_UMOM,k,i] = r*w*u   - hv_coef*d3_vals[ID_UMOM];
+      flux[ID_WMOM,k,i] = r*w*w+p - hv_coef*d3_vals[ID_WMOM];
+      flux[ID_RHOT,k,i] = r*w*t   - hv_coef*d3_vals[ID_RHOT];
     }
   }
 
-  //Use the fluxes to compute tendencies for each cell
-  /////////////////////////////////////////////////
-  // TODO: MAKE THESE 3 LOOPS A PARALLEL_FOR
-  /////////////////////////////////////////////////
-  for (int ll=0; ll<NUM_VARS; ll++) {
-    for (int k=0; k<nz; k++) {
-      for (int i=0; i<nx; i++) {
-        tend(ll,k,i) = -( flux(ll,k+1,i) - flux(ll,k,i) ) / dz;
-        if (ll == ID_WMOM) {
-          tend(ll,k,i) -= state(ID_DENS,hs+k,hs+i)*grav;
-        }
-      }
-    }
-  }
-}
+  # Use the fluxes to compute tendencies for each cell
+  #/////////////////////////////////////////////////
+  # TODO: MAKE THESE 3 LOOPS A PARALLEL_FOR
+  #/////////////////////////////////////////////////
+  for ll in range(NUM_VARS):
+    for k in range(nz):
+      for i in range(nx):
+        tend[ll,k,i] = -( flux[ll,k+1,i] - flux[ll,k,i] ) / dz
+        if ll == ID_WMOM:
+          tend[ll,k,i] -= state[ID_DENS,hs+k,hs+i]*grav
+
+  # NOTE (mfh 2025/03/03) Don't need to return anything, as long as tend can be an output parameter
 
 
+# Set this MPI task's halo values in the x-direction. This routine will require MPI
+def set_halo_values_x(
+    state, # real3d const&
+    fixed_data # Fixed_data const&
+  ) -> None:
 
-//Set this MPI task's halo values in the x-direction. This routine will require MPI
-void set_halo_values_x( real3d const &state , Fixed_data const &fixed_data ) {
-  auto &nx                 = fixed_data.nx                ;
-  auto &nz                 = fixed_data.nz                ;
-  auto &k_beg              = fixed_data.k_beg             ;
-  auto &left_rank          = fixed_data.left_rank         ;
-  auto &right_rank         = fixed_data.right_rank        ;
-  auto &myrank             = fixed_data.myrank            ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
-  auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
+  nx                 = fixed_data.nx
+  nz                 = fixed_data.nz
+  k_beg              = fixed_data.k_beg
+  left_rank          = fixed_data.left_rank
+  right_rank         = fixed_data.right_rank
+  myrank             = fixed_data.myrank
+  hy_dens_cell       = fixed_data.hy_dens_cell
+  hy_dens_theta_cell = fixed_data.hy_dens_theta_cell
 
   # //////////////////////////////////////////////////////////////////////
   # TODO: EXCHANGE HALO VALUES WITH NEIGHBORING MPI TASKS
@@ -410,17 +432,20 @@ void set_halo_values_x( real3d const &state , Fixed_data const &fixed_data ) {
             state[ID_UMOM,hs+k,i] = (state[ID_DENS,hs+k,i] + hy_dens_cell[hs+k]) * 50.0
             state[ID_RHOT,hs+k,i] = (state[ID_DENS,hs+k,i] + hy_dens_cell[hs+k]) * 298.0 - hy_dens_theta_cell[hs+k]
 
-  # TODO (mfh 2025/03/03) Return something, not sure what yet
+  # NOTE (mfh 2025/03/03) Don't need to return anything, as long as state can be an output parameter
 
 
+# Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
+# decomposition in the vertical direction
+def set_halo_values_z(
+    state, # real3d const&
+    fixed_data # Fixed_data const&
+  ) -> None:
 
-//Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
-//decomposition in the vertical direction
-void set_halo_values_z( real3d const &state , Fixed_data const &fixed_data ) {
-  auto &nx                 = fixed_data.nx                ;
-  auto &nz                 = fixed_data.nz                ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
-  
+  nx                 = fixed_data.nx
+  nz                 = fixed_data.nz
+  hy_dens_cell       = fixed_data.hy_dens_cell
+ 
   # /////////////////////////////////////////////////
   # // TODO: MAKE THESE 2 LOOPS A PARALLEL_FOR
   # /////////////////////////////////////////////////
@@ -442,7 +467,7 @@ void set_halo_values_z( real3d const &state , Fixed_data const &fixed_data ) {
         state[ll,nz+hs  ,i] = state[ll,nz+hs-1,i]
         state[ll,nz+hs+1,i] = state[ll,nz+hs-1,i]
 
-  # TODO (mfh 2025/03/03) Return something, not sure what yet
+  # NOTE (mfh 2025/03/03) Don't need to return anything, as long as state can be an output parameter
 
 
 # state, dt, and fixed_data used to be output parameters.
@@ -732,89 +757,97 @@ def hydro_const_bvfreq(z: real, bv_freq0: real): # returns (r, t)
   return (r, t)
 
 
-//Sample from an ellipse of a specified center, radius, and amplitude at a specified location
-//x and z are input coordinates
-//amp,x0,z0,xrad,zrad are input amplitude, center, and radius of the ellipse
-real sample_ellipse_cosine( real x , real z , real amp , real x0 , real z0 , real xrad , real zrad ) {
-  //Compute distance from bubble center
-  real dist = sqrt( ((x-x0)/xrad)*((x-x0)/xrad) + ((z-z0)/zrad)*((z-z0)/zrad) ) * pi / 2.;
-  //If the distance from bubble center is less than the radius, create a cos**2 profile
-  if (dist <= pi / 2.) {
-    return amp * pow(cos(dist),2.);
-  } else {
-    return 0.;
-  }
-}
+# Sample from an ellipse of a specified center, radius, and amplitude at a specified location
+# x and z are input coordinates
+# amp,x0,z0,xrad,zrad are input amplitude, center, and radius of the ellipse
+def sample_ellipse_cosine(x: real, z: real, amp: real, x0: real, z0: real, xrad: real, zrad: real) -> real:
+  # Compute distance from bubble center
+  dist: real = sqrt( ((x-x0)/xrad)*((x-x0)/xrad) + ((z-z0)/zrad)*((z-z0)/zrad) ) * pi / 2.0
+  # If the distance from bubble center is less than the radius, create a cos**2 profile
+  if dist <= pi / 2.0:
+    return amp * pow(cos(dist),2.)
+  else:
+    return 0.0
 
 
-//Output the fluid state (state) to a NetCDF file at a given elapsed model time (etime)
-//The file I/O uses parallel-netcdf, the only external library required for this mini-app.
-//If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
-void output( realConst3d state , real etime , int &num_out , Fixed_data const &fixed_data ) {
-  auto &nx                 = fixed_data.nx                ;
-  auto &nz                 = fixed_data.nz                ;
-  auto &i_beg              = fixed_data.i_beg             ;
-  auto &k_beg              = fixed_data.k_beg             ;
-  auto &mainproc         = fixed_data.mainproc        ;
-  auto &hy_dens_cell       = fixed_data.hy_dens_cell      ;
-  auto &hy_dens_theta_cell = fixed_data.hy_dens_theta_cell;
+# Output the fluid state (state) to a NetCDF file at a given elapsed model time (etime)
+# The file I/O uses parallel-netcdf, the only external library required for this mini-app.
+# If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
+def output(
+    state, # realConst3d
+    etime, # real
+    num_out, # int
+    fixed_data # Fixed_data const&
+  ) -> int: # num_out (updated)
+
+  nx                 = fixed_data.nx
+  nz                 = fixed_data.nz
+  i_beg              = fixed_data.i_beg
+  k_beg              = fixed_data.k_beg
+  mainproc           = fixed_data.mainproc
+  hy_dens_cell       = fixed_data.hy_dens_cell
+  hy_dens_theta_cell = fixed_data.hy_dens_theta_cell
 
   int ncid, t_dimid, x_dimid, z_dimid, dens_varid, uwnd_varid, wwnd_varid, theta_varid, t_varid, dimids[3];
   MPI_Offset st1[1], ct1[1], st3[3], ct3[3];
-  //Temporary arrays to hold density, u-wind, w-wind, and potential temperature (theta)
-  //Inform the user
-  if (mainproc) { printf("*** OUTPUT ***\n"); }
+  # Temporary arrays to hold density, u-wind, w-wind, and potential temperature (theta)
+  # Inform the user
+  if mainproc:
+    print("*** OUTPUT ***\n")
   # Allocate some (big) temp arrays
-  dens = doub2d("dens", nz, nx);
-  uwnd = doub2d("uwnd", nz, nx);
-  wwnd = doub2d("wwnd", nz, nx);
-  theta = doub2d("theta", nz, nx);
+  dens = doub2d("dens", nz, nx)
+  uwnd = doub2d("uwnd", nz, nx)
+  wwnd = doub2d("wwnd", nz, nx)
+  theta = doub2d("theta", nz, nx)
 
-  //If the elapsed time is zero, create the file. Otherwise, open the file
-  if (etime == 0) {
-    //Create the file
+  # If the elapsed time is zero, create the file. Otherwise, open the file
+  if etime == 0:
+    # Create the file
     ncwrap( ncmpi_create( MPI_COMM_WORLD , "output.nc" , NC_CLOBBER , MPI_INFO_NULL , &ncid ) , __LINE__ );
-    //Create the dimensions
-    ncwrap( ncmpi_def_dim( ncid , "t" , (MPI_Offset) NC_UNLIMITED , &t_dimid ) , __LINE__ );
-    ncwrap( ncmpi_def_dim( ncid , "x" , (MPI_Offset) nx_glob      , &x_dimid ) , __LINE__ );
-    ncwrap( ncmpi_def_dim( ncid , "z" , (MPI_Offset) nz_glob      , &z_dimid ) , __LINE__ );
-    //Create the variables
-    dimids[0] = t_dimid;
-    ncwrap( ncmpi_def_var( ncid , "t"     , NC_DOUBLE , 1 , dimids ,     &t_varid ) , __LINE__ );
-    dimids[0] = t_dimid; dimids[1] = z_dimid; dimids[2] = x_dimid;
-    ncwrap( ncmpi_def_var( ncid , "dens"  , NC_DOUBLE , 3 , dimids ,  &dens_varid ) , __LINE__ );
-    ncwrap( ncmpi_def_var( ncid , "uwnd"  , NC_DOUBLE , 3 , dimids ,  &uwnd_varid ) , __LINE__ );
-    ncwrap( ncmpi_def_var( ncid , "wwnd"  , NC_DOUBLE , 3 , dimids ,  &wwnd_varid ) , __LINE__ );
-    ncwrap( ncmpi_def_var( ncid , "theta" , NC_DOUBLE , 3 , dimids , &theta_varid ) , __LINE__ );
-    //End "define" mode
+    # Create the dimensions
+    ncwrap( ncmpi_def_dim( ncid , "t" , (MPI_Offset) NC_UNLIMITED , &t_dimid ) , __LINE__ )
+    ncwrap( ncmpi_def_dim( ncid , "x" , (MPI_Offset) nx_glob      , &x_dimid ) , __LINE__ )
+    ncwrap( ncmpi_def_dim( ncid , "z" , (MPI_Offset) nz_glob      , &z_dimid ) , __LINE__ )
+    # Create the variables
+    dimids[0] = t_dimid
+    ncwrap( ncmpi_def_var( ncid , "t"     , NC_DOUBLE , 1 , dimids ,     &t_varid ) , __LINE__ )
+    dimids[0] = t_dimid
+    dimids[1] = z_dimid
+    dimids[2] = x_dimid
+    ncwrap( ncmpi_def_var( ncid , "dens"  , NC_DOUBLE , 3 , dimids ,  &dens_varid ) , __LINE__ )
+    ncwrap( ncmpi_def_var( ncid , "uwnd"  , NC_DOUBLE , 3 , dimids ,  &uwnd_varid ) , __LINE__ )
+    ncwrap( ncmpi_def_var( ncid , "wwnd"  , NC_DOUBLE , 3 , dimids ,  &wwnd_varid ) , __LINE__ )
+    ncwrap( ncmpi_def_var( ncid , "theta" , NC_DOUBLE , 3 , dimids , &theta_varid ) , __LINE__ )
+    # End "define" mode
     ncwrap( ncmpi_enddef( ncid ) , __LINE__ );
-  } else {
-    //Open the file
-    ncwrap( ncmpi_open( MPI_COMM_WORLD , "output.nc" , NC_WRITE , MPI_INFO_NULL , &ncid ) , __LINE__ );
-    //Get the variable IDs
-    ncwrap( ncmpi_inq_varid( ncid , "dens"  ,  &dens_varid ) , __LINE__ );
-    ncwrap( ncmpi_inq_varid( ncid , "uwnd"  ,  &uwnd_varid ) , __LINE__ );
-    ncwrap( ncmpi_inq_varid( ncid , "wwnd"  ,  &wwnd_varid ) , __LINE__ );
-    ncwrap( ncmpi_inq_varid( ncid , "theta" , &theta_varid ) , __LINE__ );
-    ncwrap( ncmpi_inq_varid( ncid , "t"     ,     &t_varid ) , __LINE__ );
-  }
+  else:
+    # Open the file
+    ncwrap( ncmpi_open( MPI_COMM_WORLD , "output.nc" , NC_WRITE , MPI_INFO_NULL , &ncid ) , __LINE__ )
+    # Get the variable IDs
+    ncwrap( ncmpi_inq_varid( ncid , "dens"  ,  &dens_varid ) , __LINE__ )
+    ncwrap( ncmpi_inq_varid( ncid , "uwnd"  ,  &uwnd_varid ) , __LINE__ )
+    ncwrap( ncmpi_inq_varid( ncid , "wwnd"  ,  &wwnd_varid ) , __LINE__ )
+    ncwrap( ncmpi_inq_varid( ncid , "theta" , &theta_varid ) , __LINE__ )
+    ncwrap( ncmpi_inq_varid( ncid , "t"     ,     &t_varid ) , __LINE__ )
 
-  //Store perturbed values in the temp arrays for output
-  /////////////////////////////////////////////////
-  // TODO: MAKE THESE 2 LOOPS A PARALLEL_FOR
-  /////////////////////////////////////////////////
-  for (int k=0; k<nz; k++) {
-    for (int i=0; i<nx; i++) {
-      dens (k,i) = state(ID_DENS,hs+k,hs+i);
-      uwnd (k,i) = state(ID_UMOM,hs+k,hs+i) / ( hy_dens_cell(hs+k) + state(ID_DENS,hs+k,hs+i) );
-      wwnd (k,i) = state(ID_WMOM,hs+k,hs+i) / ( hy_dens_cell(hs+k) + state(ID_DENS,hs+k,hs+i) );
-      theta(k,i) = ( state(ID_RHOT,hs+k,hs+i) + hy_dens_theta_cell(hs+k) ) / ( hy_dens_cell(hs+k) + state(ID_DENS,hs+k,hs+i) ) - hy_dens_theta_cell(hs+k) / hy_dens_cell(hs+k);
-    }
-  }
+  # Store perturbed values in the temp arrays for output
+  # /////////////////////////////////////////////////
+  # TODO: MAKE THESE 2 LOOPS A PARALLEL_FOR
+  # /////////////////////////////////////////////////
+  for k in range(nz):
+    for i in range(nx):
+      dens[k,i]  = state[ID_DENS,hs+k,hs+i]
+      uwnd[k,i]  = state[ID_UMOM,hs+k,hs+i] / ( hy_dens_cell[hs+k] + state[ID_DENS,hs+k,hs+i] )
+      wwnd[k,i]  = state[ID_WMOM,hs+k,hs+i] / ( hy_dens_cell[hs+k] + state[ID_DENS,hs+k,hs+i] )
+      theta[k,i] = ( state[ID_RHOT,hs+k,hs+i] + hy_dens_theta_cell[hs+k] ) / ( hy_dens_cell[hs+k] + state[ID_DENS,hs+k,hs+i] ) - hy_dens_theta_cell[hs+k] / hy_dens_cell[hs+k]
 
-  //Write the grid data to file with all the processes writing collectively
-  st3[0] = num_out; st3[1] = k_beg; st3[2] = i_beg;
-  ct3[0] = 1      ; ct3[1] = nz   ; ct3[2] = nx   ;
+  # Write the grid data to file with all the processes writing collectively
+  st3[0] = num_out
+  st3[1] = k_beg
+  st3[2] = i_beg
+  ct3[0] = 1
+  ct3[1] = nz
+  ct3[2] = nx
   ncwrap( ncmpi_put_vara_double_all( ncid ,  dens_varid , st3 , ct3 , dens.data()  ) , __LINE__ );
   ncwrap( ncmpi_put_vara_double_all( ncid ,  uwnd_varid , st3 , ct3 , uwnd.data()  ) , __LINE__ );
   ncwrap( ncmpi_put_vara_double_all( ncid ,  wwnd_varid , st3 , ct3 , wwnd.data()  ) , __LINE__ );
@@ -823,22 +856,23 @@ void output( realConst3d state , real etime , int &num_out , Fixed_data const &f
   //Only the main process needs to write the elapsed time
   //Begin "independent" write mode
   ncwrap( ncmpi_begin_indep_data(ncid) , __LINE__ );
-  //write elapsed time to file
-  if (mainproc) {
-    st1[0] = num_out;
-    ct1[0] = 1;
+  # write elapsed time to file
+  if mainproc:
+    st1[0] = num_out
+    ct1[0] = 1
     double etimearr[1];
     etimearr[0] = etime; ncwrap( ncmpi_put_vara_double( ncid , t_varid , st1 , ct1 , etimearr ) , __LINE__ );
-  }
+
   //End "independent" write mode
   ncwrap( ncmpi_end_indep_data(ncid) , __LINE__ );
 
   //Close the file
   ncwrap( ncmpi_close(ncid) , __LINE__ );
 
-  //Increment the number of outputs
+  # Increment the number of outputs
   num_out = num_out + 1;
-}
+
+  return num_out
 
 
 //Error reporting routine for the PNetCDF I/O
@@ -867,8 +901,8 @@ def reductions(
   hy_dens_cell       = fixed_data.hy_dens_cell      
   hy_dens_theta_cell = fixed_data.hy_dens_theta_cell
 
-  mass = 0
-  te   = 0
+  mass: double = 0.0
+  te: double   = 0.0
   for k in range(nz):
     for i in range(nx):
       r = state[ID_DENS,hs+k,hs+i] + hy_dens_cell[hs+k]                # Density
