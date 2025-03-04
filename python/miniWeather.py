@@ -9,54 +9,129 @@
 
 import sys
 import timeit
-#include "const.h"
+import numpy as np
 #include "pnetcdf.h"
 
+# "real" in the original C++ code could be either float or double.
+real = np.float64 # or np.float32
+
+#
+# Constants (ported from cpp/const.h)
+#
+
+hs: int = 2
+
+# We don't like code that redefines pi,
+# but we keep it just for now, to test that
+# the Python gives the same results as the C++.
+pi: real   = 3.14159265358979323846264338327
+grav: real = 9.8     # Gravitational acceleration (m / s^2)
+cp: real   = 1004.0  # Specific heat of dry air at constant pressure
+cv: real   = 717.0   # Specific heat of dry air at constant volume
+rd: real   = 287.0   # Dry air constant for equation of state (P=rho*rd*T)
+p0: real   = 1.e5    # Standard pressure at the surface in Pascals
+C0: real   = 27.5629410929725921310572974482 # Constant to translate potential temperature into pressure (P=C0*(rho*theta)**gamma)
+# gamma=cp/Rd, have to call this gamm because "gamma" is taken (I hate C so much)
+gamm: real = 1.40027894002789400278940027894
+
+#
+# Domain and stability-related constants
+#
+
+xlen: real = 2.e4    # Length of the domain in the x-direction (meters)
+zlen: real = 1.e4    # Length of the domain in the z-direction (meters)
+hv_beta: real = 0.05 # How strong to diffuse the solution: hv_beta \in [0:1]
+cfl: real = 1.50     # "Courant, Friedrichs, Lewy" number (for numerical stability)
+max_speed: real = 450 # Assumed maximum wave speed during the simulation (speed of sound + speed of wind) (meter / sec)
 # "Halo" size: number of cells beyond the MPI tasks's domain
 # needed for a full "stencil" of information for reconstruction
 hs: int = 2
+# Size of the stencil used for interpolation
+sten_size: int = 4
 
-# real can be either float or double, depending on cpp/const.h.
+# ///////////////////////////////////////////////////////////////////////////////////////
+# // BEGIN USER-CONFIGURABLE PARAMETERS
+# ///////////////////////////////////////////////////////////////////////////////////////
+# The x-direction length is twice as long as the z-direction length
+# So, you'll want to have nx_glob be twice as large as nz_glob
+nx_glob: int = _NX              # Number of total cells in the x-direction
+nz_glob: int = _NZ              # Number of total cells in the z-direction
+sim_time: real = _SIM_TIME      # How many seconds to run the simulation
+output_freq: real = _OUT_FREQ   # How frequently to output data to file (in seconds)
+data_spec_int: int = _DATA_SPEC # How to initialize the data
+# ///////////////////////////////////////////////////////////////////////////////////////
+# // END USER-CONFIGURABLE PARAMETERS
+# ///////////////////////////////////////////////////////////////////////////////////////
+dx: real = xlen / nx_glob
+dz: real = zlen / nz_glob
+
+
+#
+# Parameters for indexing and flags
+#
+
+NUM_VARS: int = 4           # Number of fluid state variables
+ID_DENS: int = 0           #index for density ("rho")
+ID_UMOM: int = 1           #index for momentum in the x-direction ("rho * u")
+ID_WMOM: int = 2           #index for momentum in the z-direction ("rho * w")
+ID_RHOT: int = 3           #index for density * potential temperature ("rho * theta")
+DIR_X: int = 1              #Integer constant to express that this operation is in the x-direction
+DIR_Z: int = 2              #Integer constant to express that this operation is in the z-direction
+DATA_SPEC_COLLISION: int = 1
+DATA_SPEC_THERMAL: int = 2
+DATA_SPEC_GRAVITY_WAVES: int = 3
+DATA_SPEC_DENSITY_CURRENT: int = 5
+DATA_SPEC_INJECTION: int = 6
+
+#
+# These functions aid in porting from the original C++.
+#
 
 #typedef yakl::Array<real  ,1,yakl::memHost> real1d;
 def real1d(name: string, nx: int):
-    # FIXME (mfh 2025/03/03) This should NOT return the same thing as doub1d; need to change type
-    return np.zeros(nx) # FIXME (mfh 2025/03/03)
+  return np.zeros(nx, dtype=real)
 
 #typedef yakl::Array<real  ,2,yakl::memHost> real2d;
 def real2d(name: string, nx: int, nz: int):
-    return np.zeros((nz, nx)) # FIXME (mfh 2025/03/03) What element type should this return?
+  return np.zeros((nz, nx), dtype=real)
 
 #typedef yakl::Array<real  ,3,yakl::memHost> real3d;
 def real3d(name: string, nx: int, nz: int, nvars: int):
-    return np.zeros((nvars, nz, nx)) # FIXME (mfh 2025/03/03) What element type should this return?
+  return np.zeros((nvars, nz, nx), dtype=real)
 
 #typedef yakl::Array<double,2,yakl::memHost> doub2d;
 def doub2d(name: string, nx: int, nz: int):
-    return np.zeros((nz, nx)) # FIXME (mfh 2025/03/03) What element type should this return?
+  return np.zeros((nz, nx), dtype=real)
 
-typedef yakl::Array<real   const,1,yakl::memHost> realConst1d;
-typedef yakl::Array<real   const,2,yakl::memHost> realConst2d;
-typedef yakl::Array<real   const,3,yakl::memHost> realConst3d;
-typedef yakl::Array<double const,1,yakl::memHost> doubConst1d;
-typedef yakl::Array<double const,2,yakl::memHost> doubConst2d;
-typedef yakl::Array<double const,3,yakl::memHost> doubConst3d;
+#typedef yakl::Array<real   const,1,yakl::memHost> realConst1d;
+def realConst1d(name: string, nx: int):
+  return np.zeros(nx, dtype=real)
 
-///////////////////////////////////////////////////////////////////////////////////////
-// Variables that are initialized but remain static over the course of the simulation
-///////////////////////////////////////////////////////////////////////////////////////
-struct Fixed_data {
-  int nx, nz;                 //Number of local grid cells in the x- and z- dimensions for this MPI task
-  int i_beg, k_beg;           //beginning index in the x- and z-directions for this MPI task
-  int nranks, myrank;         //Number of MPI ranks and my rank id
-  int left_rank, right_rank;  //MPI Rank IDs that exist to my left and right in the global domain
-  int mainproc;             //Am I the main process (rank == 0)?
-  realConst1d hy_dens_cell;        //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
-  realConst1d hy_dens_theta_cell;  //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
-  realConst1d hy_dens_int;         //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
-  realConst1d hy_dens_theta_int;   //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
-  realConst1d hy_pressure_int;     //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
-};
+#typedef yakl::Array<real   const,2,yakl::memHost> realConst2d;
+def realConst2d(name: string, nx: int, nz: int):
+  return np.zeros((nz, nx), dtype=real)
+
+# ///////////////////////////////////////////////////////////////////////////////////////
+# // Variables that are initialized but remain static over the course of the simulation
+# ///////////////////////////////////////////////////////////////////////////////////////
+
+class Fixed_data:
+  def __init__(self):
+    self.nx = 0          # Number of local grid cells in the x dimension for this MPI task
+    self.nz = 0          # Number of local grid cells in the z dimension for this MPI task
+    self.i_beg = 0       # beginning index in the x direction for this MPI task
+    self.k_beg = 0       # beginning index in the z direction for this MPI task
+    self.nranks = 0      # Number of MPI ranks
+    self.myrank = 0      # My rank id
+    self.left_rank = 0   # MPI Rank ID that exists to my left in the global domain
+    self.right_rank = 0  # MPI Rank ID that exists to my right in the global domain
+    self.mainproc = True # Am I the main process (rank == 0)?
+    self.hy_dens_cell = None       # realConst1d: hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
+    self.hy_dens_theta_cell = None # realConst1d: hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
+    self.hy_dens_int = None        # realConst1d: hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
+    self.hy_dens_theta_int = None  # realConst1d: hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
+    self.hy_pressure_int = None    # realConst1d: hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
+
 
 # ///////////////////////////////////////////////////////////////////////////////////////
 # // THE MAIN PROGRAM STARTS HERE
@@ -68,7 +143,7 @@ def main() -> None:
   # fixed_data: Fixed_data
   # state: real3d
   # dt: real: Model time step (seconds)
-  (fixed_data, state, dt) = init() # init( state , dt , fixed_data );
+  (fixed_data, state, dt) = init()
 
   mainproc = fixed_data.mainproc
 
@@ -468,19 +543,7 @@ def set_halo_values_z(
 # state, dt, and fixed_data used to be output parameters.
 # It would be more Pythonic to return them as a tuple.
 def init(): # -> tuple[real3d, real, Fixed_data]:
-  #real3d state
-  #Fixed_data fixed_data
-  #real dt
 
-  auto &nx                 = fixed_data.nx                ;
-  auto &nz                 = fixed_data.nz                ;
-  auto &i_beg              = fixed_data.i_beg             ;
-  auto &k_beg              = fixed_data.k_beg             ;
-  auto &left_rank          = fixed_data.left_rank         ;
-  auto &right_rank         = fixed_data.right_rank        ;
-  auto &nranks             = fixed_data.nranks            ;
-  auto &myrank             = fixed_data.myrank            ;
-  auto &mainproc         = fixed_data.mainproc        ;
   ierr: int = 0
 
   # /////////////////////////////////////////////////////////////
@@ -501,7 +564,8 @@ def init(): # -> tuple[real3d, real, Fixed_data]:
   # END MPI DUMMY SECTION
   # //////////////////////////////////////////////
 
-  # Vertical direction isn't MPI-ized, so the rank's local values = the global values
+  # Vertical direction isn't MPI-ized,
+  # so the rank's local values = the global values
   k_beg = 0
   nz = nz_glob
   mainproc = (myrank == 0)
@@ -522,10 +586,7 @@ def init(): # -> tuple[real3d, real, Fixed_data]:
   # ierr = MPI_Barrier(MPI_COMM_WORLD);
 
   # Define quadrature weights and points
-  nqpoints: int = 3 
-  # SArray<real,1,nqpoints> qpoints;
-  # SArray<real,1,nqpoints> qweights;
-
+  nqpoints: int = 3
   qpoints = np.array([
       0.112701665379258311482073460022,
       0.500000000000000000000000000000,
@@ -555,11 +616,6 @@ def init(): # -> tuple[real3d, real, Fixed_data]:
           # Compute the x,z location within the global domain based on cell and quadrature index
           x: real = (i_beg + i-hs+0.5)*dx + (qpoints[ii]-0.5)*dx
           z: real = (k_beg + k-hs+0.5)*dz + (qpoints[kk]-0.5)*dz
-          # real r, u, w, t, hr, ht;
-
-          # The above real variables are probably output parameters
-          # of collision, thermal, gravity_waves, density_current, and injection.
-          # x and z are probably input parameters of these functions.
 
           # Set the fluid state based on the user's specification
           if data_spec_int == DATA_SPEC_COLLISION:
@@ -574,16 +630,16 @@ def init(): # -> tuple[real3d, real, Fixed_data]:
             (r,u,w,t,hr,ht) = injection(x,z)
 
           # Store into the fluid state array
-          state[ID_DENS,k,i] += r                         * qweights[ii]*qweights[kk];
-          state[ID_UMOM,k,i] += (r+hr)*u                  * qweights[ii]*qweights[kk];
-          state[ID_WMOM,k,i] += (r+hr)*w                  * qweights[ii]*qweights[kk];
-          state[ID_RHOT,k,i] += ( (r+hr)*(t+ht) - hr*ht ) * qweights[ii]*qweights[kk];
+          state[ID_DENS,k,i] += r                         * qweights[ii]*qweights[kk]
+          state[ID_UMOM,k,i] += (r+hr)*u                  * qweights[ii]*qweights[kk]
+          state[ID_WMOM,k,i] += (r+hr)*w                  * qweights[ii]*qweights[kk]
+          state[ID_RHOT,k,i] += ( (r+hr)*(t+ht) - hr*ht ) * qweights[ii]*qweights[kk]
 
-  hy_dens_cell       = real1d("hy_dens_cell      ", nz+2*hs);
-  hy_dens_theta_cell = real1d("hy_dens_theta_cell", nz+2*hs);
-  hy_dens_int        = real1d("hy_dens_int       ", nz+1);
-  hy_dens_theta_int  = real1d("hy_dens_theta_int ", nz+1);
-  hy_pressure_int    = real1d("hy_pressure_int   ", nz+1);
+  hy_dens_cell       = real1d("hy_dens_cell      ", nz+2*hs)
+  hy_dens_theta_cell = real1d("hy_dens_theta_cell", nz+2*hs)
+  hy_dens_int        = real1d("hy_dens_int       ", nz+1)
+  hy_dens_theta_int  = real1d("hy_dens_theta_int ", nz+1)
+  hy_pressure_int    = real1d("hy_pressure_int   ", nz+1)
 
   # Compute the hydrostatic background state over vertical cell averages
   # /////////////////////////////////////////////////
@@ -630,15 +686,20 @@ def init(): # -> tuple[real3d, real, Fixed_data]:
     
     hy_dens_int[k]       = hr
     hy_dens_theta_int[k] = hr*ht
-    hy_pressure_int[k]   = C0*pow((hr*ht),gamm)
+    hy_pressure_int[k]   = C0*pow((hr*ht), gamm)
 
-  fixed_data.hy_dens_cell       = realConst1d(hy_dens_cell      )
-  fixed_data.hy_dens_theta_cell = realConst1d(hy_dens_theta_cell)
-  fixed_data.hy_dens_int        = realConst1d(hy_dens_int       )
-  fixed_data.hy_dens_theta_int  = realConst1d(hy_dens_theta_int )
-  fixed_data.hy_pressure_int    = realConst1d(hy_pressure_int   )
+  hy_dens_cell       = realConst1d(hy_dens_cell      )
+  hy_dens_theta_cell = realConst1d(hy_dens_theta_cell)
+  hy_dens_int        = realConst1d(hy_dens_int       )
+  hy_dens_theta_int  = realConst1d(hy_dens_theta_int )
+  hy_pressure_int    = realConst1d(hy_pressure_int   )
 
-  # FIXME (mfh 2025/03/03) This should return something; not sure what yet
+  fixed_data = Fixed_data(nx, nz, i_beg, k_beg,
+    nranks, myrank, left_rank, right_rank, mainproc,
+    hy_dens_cell, hy_dens_theta_cell, hy_dens_int,
+    hy_dens_theta_int, hy_pressure_int)
+
+  return (state, fixed_data, dt)
 
 # This test case is initially balanced but injects fast, cold air from the left boundary near the model top
 # x and z are input coordinates at which to sample
@@ -775,109 +836,15 @@ def output(
     fixed_data # Fixed_data const&
   ) -> int: # num_out (updated)
 
-  nx                 = fixed_data.nx
-  nz                 = fixed_data.nz
-  i_beg              = fixed_data.i_beg
-  k_beg              = fixed_data.k_beg
-  mainproc           = fixed_data.mainproc
-  hy_dens_cell       = fixed_data.hy_dens_cell
-  hy_dens_theta_cell = fixed_data.hy_dens_theta_cell
-
-  int ncid, t_dimid, x_dimid, z_dimid, dens_varid, uwnd_varid, wwnd_varid, theta_varid, t_varid, dimids[3];
-  MPI_Offset st1[1], ct1[1], st3[3], ct3[3];
-  # Temporary arrays to hold density, u-wind, w-wind, and potential temperature (theta)
-  # Inform the user
   if mainproc:
     print("*** OUTPUT ***\n")
-  # Allocate some (big) temp arrays
-  dens = doub2d("dens", nz, nx)
-  uwnd = doub2d("uwnd", nz, nx)
-  wwnd = doub2d("wwnd", nz, nx)
-  theta = doub2d("theta", nz, nx)
 
-  # If the elapsed time is zero, create the file. Otherwise, open the file
-  if etime == 0:
-    # Create the file
-    ncwrap( ncmpi_create( MPI_COMM_WORLD , "output.nc" , NC_CLOBBER , MPI_INFO_NULL , &ncid ) , __LINE__ );
-    # Create the dimensions
-    ncwrap( ncmpi_def_dim( ncid , "t" , (MPI_Offset) NC_UNLIMITED , &t_dimid ) , __LINE__ )
-    ncwrap( ncmpi_def_dim( ncid , "x" , (MPI_Offset) nx_glob      , &x_dimid ) , __LINE__ )
-    ncwrap( ncmpi_def_dim( ncid , "z" , (MPI_Offset) nz_glob      , &z_dimid ) , __LINE__ )
-    # Create the variables
-    dimids[0] = t_dimid
-    ncwrap( ncmpi_def_var( ncid , "t"     , NC_DOUBLE , 1 , dimids ,     &t_varid ) , __LINE__ )
-    dimids[0] = t_dimid
-    dimids[1] = z_dimid
-    dimids[2] = x_dimid
-    ncwrap( ncmpi_def_var( ncid , "dens"  , NC_DOUBLE , 3 , dimids ,  &dens_varid ) , __LINE__ )
-    ncwrap( ncmpi_def_var( ncid , "uwnd"  , NC_DOUBLE , 3 , dimids ,  &uwnd_varid ) , __LINE__ )
-    ncwrap( ncmpi_def_var( ncid , "wwnd"  , NC_DOUBLE , 3 , dimids ,  &wwnd_varid ) , __LINE__ )
-    ncwrap( ncmpi_def_var( ncid , "theta" , NC_DOUBLE , 3 , dimids , &theta_varid ) , __LINE__ )
-    # End "define" mode
-    ncwrap( ncmpi_enddef( ncid ) , __LINE__ );
-  else:
-    # Open the file
-    ncwrap( ncmpi_open( MPI_COMM_WORLD , "output.nc" , NC_WRITE , MPI_INFO_NULL , &ncid ) , __LINE__ )
-    # Get the variable IDs
-    ncwrap( ncmpi_inq_varid( ncid , "dens"  ,  &dens_varid ) , __LINE__ )
-    ncwrap( ncmpi_inq_varid( ncid , "uwnd"  ,  &uwnd_varid ) , __LINE__ )
-    ncwrap( ncmpi_inq_varid( ncid , "wwnd"  ,  &wwnd_varid ) , __LINE__ )
-    ncwrap( ncmpi_inq_varid( ncid , "theta" , &theta_varid ) , __LINE__ )
-    ncwrap( ncmpi_inq_varid( ncid , "t"     ,     &t_varid ) , __LINE__ )
-
-  # Store perturbed values in the temp arrays for output
-  # /////////////////////////////////////////////////
-  # TODO: MAKE THESE 2 LOOPS A PARALLEL_FOR
-  # /////////////////////////////////////////////////
-  for k in range(nz):
-    for i in range(nx):
-      dens[k,i]  = state[ID_DENS,hs+k,hs+i]
-      uwnd[k,i]  = state[ID_UMOM,hs+k,hs+i] / ( hy_dens_cell[hs+k] + state[ID_DENS,hs+k,hs+i] )
-      wwnd[k,i]  = state[ID_WMOM,hs+k,hs+i] / ( hy_dens_cell[hs+k] + state[ID_DENS,hs+k,hs+i] )
-      theta[k,i] = ( state[ID_RHOT,hs+k,hs+i] + hy_dens_theta_cell[hs+k] ) / ( hy_dens_cell[hs+k] + state[ID_DENS,hs+k,hs+i] ) - hy_dens_theta_cell[hs+k] / hy_dens_cell[hs+k]
-
-  # Write the grid data to file with all the processes writing collectively
-  st3[0] = num_out
-  st3[1] = k_beg
-  st3[2] = i_beg
-  ct3[0] = 1
-  ct3[1] = nz
-  ct3[2] = nx
-  ncwrap( ncmpi_put_vara_double_all( ncid ,  dens_varid , st3 , ct3 , dens.data()  ) , __LINE__ );
-  ncwrap( ncmpi_put_vara_double_all( ncid ,  uwnd_varid , st3 , ct3 , uwnd.data()  ) , __LINE__ );
-  ncwrap( ncmpi_put_vara_double_all( ncid ,  wwnd_varid , st3 , ct3 , wwnd.data()  ) , __LINE__ );
-  ncwrap( ncmpi_put_vara_double_all( ncid , theta_varid , st3 , ct3 , theta.data() ) , __LINE__ );
-
-  //Only the main process needs to write the elapsed time
-  //Begin "independent" write mode
-  ncwrap( ncmpi_begin_indep_data(ncid) , __LINE__ );
-  # write elapsed time to file
-  if mainproc:
-    st1[0] = num_out
-    ct1[0] = 1
-    double etimearr[1];
-    etimearr[0] = etime; ncwrap( ncmpi_put_vara_double( ncid , t_varid , st1 , ct1 , etimearr ) , __LINE__ );
-
-  //End "independent" write mode
-  ncwrap( ncmpi_end_indep_data(ncid) , __LINE__ );
-
-  //Close the file
-  ncwrap( ncmpi_close(ncid) , __LINE__ );
+  # TODO (mfh 2025/03/04) Actually write to the output file.
 
   # Increment the number of outputs
   num_out = num_out + 1;
 
   return num_out
-
-
-//Error reporting routine for the PNetCDF I/O
-void ncwrap( int ierr , int line ) {
-  if (ierr != NC_NOERR) {
-    print(f"NetCDF Error at line: {line}\n")
-    print(f"{ncmpi_strerror(ierr)}\n")
-    sys.exit(-1)
-  }
-}
 
 
 def finalize() -> None:
