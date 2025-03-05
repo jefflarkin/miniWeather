@@ -74,7 +74,7 @@ sten_size: int = 4
 # So, you'll want to have nx_glob be twice as large as nz_glob
 nz_glob: int = 50               # Number of total cells in the z-direction
 nx_glob: int = 2 * nz_glob      # Number of total cells in the x-direction
-sim_time: real = 1000.0         # How many seconds to run the simulation
+sim_time: real = 20.0 #1000.0         # How many seconds to run the simulation
 output_freq: real = 10.0        # How frequently to output data to file (in seconds)
 data_spec_int: int = DATA_SPEC_INJECTION # How to initialize the data
 # ///////////////////////////////////////////////////////////////////////////////////////
@@ -174,6 +174,7 @@ def main() -> None:
   # ////////////////////////////////////////////////////
   # MAIN TIME STEP LOOP
   # ////////////////////////////////////////////////////
+
   def main_time_step_loop(dt: real, etime: real, num_out: int) -> None:
     direction_switch: int = 1  # Order in which dimensional splitting takes x,z solves
     output_counter: real = 0.0 # Helps determine when it's time to do output
@@ -195,10 +196,14 @@ def main() -> None:
       if output_freq >= 0 and output_counter >= output_freq:
         output_counter = output_counter - output_freq
       num_out = output(state, etime, num_out, fixed_data)
-      # NOTE (mfh 2025/03/04) etime and num_out will be discarded.
-      # Figure out how to return them from within a timeit expression.
 
-  time_in_s = timeit.timeit(main_time_step_loop(dt, etime, num_out), number=1)
+    return (etime, num_out)
+
+  start_time = timeit.default_timer()
+  (etime, num_out) = main_time_step_loop(dt, etime, num_out)
+  end_time = timeit.default_timer()
+
+  time_in_s = end_time - start_time
   if mainproc:
     print(f"CPU Time: {time_in_s} s\n")
 
