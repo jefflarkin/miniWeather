@@ -301,33 +301,24 @@ def semi_discrete_step(
 
   if dir == DIR_X:
     # Set the halo values for this MPI task's fluid state in the x-direction
-    #yakl::timer_start("halo x");
     set_halo_values_x(state_forcing, fixed_data)
-    #yakl::timer_stop("halo x");
     # Compute the time tendencies for the fluid state in the x-direction
-    #yakl::timer_start("tendencies x");
     compute_tendencies_x(state_forcing, flux, tend, dt, fixed_data)
-    #yakl::timer_stop("tendencies x");
   elif dir == DIR_Z:
     # Set the halo values for this MPI task's fluid state in the z-direction
-    #yakl::timer_start("halo z");
     set_halo_values_z(state_forcing, fixed_data)
-    #yakl::timer_stop("halo z");
     # Compute the time tendencies for the fluid state in the z-direction
-    #yakl::timer_start("tendencies z");
     compute_tendencies_z(state_forcing, flux, tend, dt, fixed_data)
-    #yakl::timer_stop("tendencies z");
 
   # /////////////////////////////////////////////////
   # // TODO: MAKE THESE 3 LOOPS A PARALLEL_FOR
   # /////////////////////////////////////////////////
   # Apply the tendencies to the fluid state
-  # yakl::timer_start("apply tendencies");
   for ll in range(NUM_VARS):
     for k in range(nz):
       for i in range(nx):
         if data_spec_int == DATA_SPEC_GRAVITY_WAVES:
-          print("*** NOT IMPLEMENTED ***");
+          print("*** TEMPORARILY DISABLED ***");
           sys.exit(-1);
           
           x: real = (i_beg + i+0.5)*dx;
@@ -336,8 +327,6 @@ def semi_discrete_step(
           tend[ID_WMOM,k,i] += wpert*hy_dens_cell[hs+k]
 
         state_out[ll,hs+k,hs+i] = state_init[ll,hs+k,hs+i] + dt * tend[ll,k,i]
-
-  # yakl::timer_stop("apply tendencies");
 
   # NOTE It's OK for this not to return anything,
   # as long as we can treat state_out as an output parameter.
