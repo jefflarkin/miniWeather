@@ -840,7 +840,7 @@ def hydro_const_theta(z: real): # returns (r, t)
 def hydro_const_bvfreq(z: real, bv_freq0: real): # returns (r, t)
   theta0: real = 300.0  # Background potential temperature
   exner0: real =   1.0  # Surface-level Exner pressure
-  t = theta0 * exp( bv_freq0*bv_freq0 / grav * z )                                     # Pot temp at z
+  t = theta0 * math.exp( bv_freq0*bv_freq0 / grav * z )                                     # Pot temp at z
   exner = exner0 - grav*grav / (cp * bv_freq0*bv_freq0) * (t - theta0) / (t * theta0)  # Exner pressure at z
   p = p0 * math.pow(exner,(cp/rd))                                                          # Pressure at z
   rt = math.pow((p / C0),(1. / gamm))                                                       # rho*theta at z
