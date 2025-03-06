@@ -159,7 +159,7 @@ def main() -> None:
   # state_tmp: real3d, ditto
   # flux: real3d, NUM_VARS x (nz+1) x (nx+1)
   # dt: real: Model time step (seconds)
-  (state, state_tmp, flux, fixed_data, dt) = init()
+  (state, state_tmp, flux, tend, fixed_data, dt) = init()
 
   mainproc = fixed_data.mainproc
 
@@ -190,7 +190,7 @@ def main() -> None:
         dt = sim_time - etime
 
       # Perform a single time step
-      direction_switch = perform_timestep(state, state_tmp, flux, dt, direction_switch, fixed_data)
+      direction_switch = perform_timestep(state, state_tmp, flux, tend, dt, direction_switch, fixed_data)
       # Inform the user
       if mainproc:
         print(f"Elapsed Time: {etime}, Simulation Time: {sim_time}")
@@ -241,6 +241,7 @@ def perform_timestep(
     state, # real3d const&, input parameter
     state_tmp, # real3d
     flux, # real3d
+    tend, # real3d
     dt, # real, must be an input parameter
     direction_switch, # int&, in/out parameter, transformed to input and return value
     fixed_data # Fixed_data const &, input parameter
@@ -252,22 +253,22 @@ def perform_timestep(
   print(f'direction_switch: {direction_switch}')
   if direction_switch:
     # x-direction first
-    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, flux, fixed_data)
-    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, flux, fixed_data)
-    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_X, flux, fixed_data)
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, flux, tend, fixed_data)
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, flux, tend, fixed_data)
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_X, flux, tend, fixed_data)
     # z-direction second
-    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_Z, flux, fixed_data)
-    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_Z, flux, fixed_data)
-    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_Z, flux, fixed_data)
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_Z, flux, tend, fixed_data)
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_Z, flux, tend, fixed_data)
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_Z, flux, tend, fixed_data)
   else:
     # z-direction second
-    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_Z, flux, fixed_data)
-    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_Z, flux, fixed_data)
-    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_Z, flux, fixed_data)
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_Z, flux, tend, fixed_data)
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_Z, flux, tend, fixed_data)
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_Z, flux, tend, fixed_data)
     # x-direction first
-    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, flux, fixed_data)
-    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, flux, fixed_data)
-    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_X, flux, fixed_data)
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, flux, tend, fixed_data)
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, flux, tend, fixed_data)
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_X, flux, tend, fixed_data)
 
   if direction_switch:
     direction_switch = 0
@@ -288,6 +289,7 @@ def semi_discrete_step(
     dt: real,
     dir: int,
     flux, # real3d
+    tend, # real3d
     fixed_data # Fixed_data const&
   ) -> None:
 
@@ -296,8 +298,6 @@ def semi_discrete_step(
   i_beg              = fixed_data.i_beg
   k_beg              = fixed_data.k_beg
   hy_dens_cell       = fixed_data.hy_dens_cell
-
-  tend = real3d("tend", nx=nx, nz=nz, nvars=NUM_VARS)
 
   if dir == DIR_X:
     # Set the halo values for this MPI task's fluid state in the x-direction
@@ -393,7 +393,7 @@ def compute_tendencies_x(
       u = vals[ID_UMOM] / r
       w = vals[ID_WMOM] / r
       t = (vals[ID_RHOT] + hy_dens_theta_cell[hs+k]) / r
-      p = C0*pow((r*t), gamm)
+      p = C0*math.pow((r*t), gamm)
 
       # Compute the flux vector
       flux[ID_DENS,k,i] = r*u     - hv_coef*d3_vals[ID_DENS]
@@ -464,7 +464,7 @@ def compute_tendencies_z(
       u: real = vals[ID_UMOM] / r;
       w: real = vals[ID_WMOM] / r;
       t: real = ( vals[ID_RHOT] + hy_dens_theta_int[k] ) / r;
-      p: real = C0*pow((r*t),gamm) - hy_pressure_int[k];
+      p: real = C0*math.pow((r*t),gamm) - hy_pressure_int[k];
       if k == 0 or k == nz:
         w                = 0;
         d3_vals[ID_DENS] = 0;
@@ -574,7 +574,7 @@ def set_halo_values_z(
 
 # state, dt, and fixed_data used to be output parameters.
 # It would be more Pythonic to return them as a tuple.
-def init(): # -> (state: real3d, state_tmp: real3d, flux: real3d, dt: real, fixed_data: Fixed_data)
+def init(): # -> (state: real3d, state_tmp: real3d, flux: real3d, tend: real3d, dt: real, fixed_data: Fixed_data)
 
   ierr: int = 0
 
@@ -608,6 +608,7 @@ def init(): # -> (state: real3d, state_tmp: real3d, flux: real3d, dt: real, fixe
     print(f"Allocate state: NUM_VARS={NUM_VARS}, nx+2*hs={nx+2*hs}, nz+2*hs={nz+2*hs}")
   state_tmp = real3d("state_tmp", nx=nx+2*hs, nz=nz+2*hs, nvars=NUM_VARS)
   flux = real3d("flux", nx=nx+1, nz=nz+1, nvars=NUM_VARS)
+  tend = real3d("tend", nx=nx, nz=nz, nvars=NUM_VARS)
 
   # Define the maximum stable time step based on an assumed maximum wind speed
   dt: real = min(dx,dz) / max_speed * cfl;
@@ -727,14 +728,14 @@ def init(): # -> (state: real3d, state_tmp: real3d, flux: real3d, dt: real, fixe
     
     hy_dens_int[k]       = hr
     hy_dens_theta_int[k] = hr*ht
-    hy_pressure_int[k]   = C0*pow((hr*ht), gamm)
+    hy_pressure_int[k]   = C0*math.pow((hr*ht), gamm)
 
   fixed_data = Fixed_data(nx, nz, i_beg, k_beg,
     nranks, myrank, left_rank, right_rank, mainproc,
     hy_dens_cell, hy_dens_theta_cell, hy_dens_int,
     hy_dens_theta_int, hy_pressure_int)
 
-  return (state, state_tmp, flux, fixed_data, dt)
+  return (state, state_tmp, flux, tend, fixed_data, dt)
 
 # This test case is initially balanced but injects fast, cold air from the left boundary near the model top
 # x and z are input coordinates at which to sample
@@ -824,8 +825,8 @@ def hydro_const_theta(z: real): # returns (r, t)
   # Establish hydrostatic balance first using Exner pressure
   t = theta0                                  # Potential Temperature at z
   exner = exner0 - grav * z / (cp * theta0)   # Exner pressure at z
-  p = p0 * pow(exner, (cp/rd))                # Pressure at z
-  rt = pow((p / C0), (1. / gamm))             # rho*theta at z
+  p = p0 * math.pow(exner, (cp/rd))                # Pressure at z
+  rt = math.pow((p / C0), (1. / gamm))             # rho*theta at z
   r = rt / t                                  # Density at z
 
   return (r, t)
@@ -841,8 +842,8 @@ def hydro_const_bvfreq(z: real, bv_freq0: real): # returns (r, t)
   exner0: real =   1.0  # Surface-level Exner pressure
   t = theta0 * exp( bv_freq0*bv_freq0 / grav * z )                                     # Pot temp at z
   exner = exner0 - grav*grav / (cp * bv_freq0*bv_freq0) * (t - theta0) / (t * theta0)  # Exner pressure at z
-  p = p0 * pow(exner,(cp/rd))                                                          # Pressure at z
-  rt = pow((p / C0),(1. / gamm))                                                       # rho*theta at z
+  p = p0 * math.pow(exner,(cp/rd))                                                          # Pressure at z
+  rt = math.pow((p / C0),(1. / gamm))                                                       # rho*theta at z
   r = rt / t                                                                           # Density at z
 
   return (r, t)
@@ -900,8 +901,8 @@ def reductions(
       u = state[ID_UMOM,hs+k,hs+i] / r                                 # U-wind
       w = state[ID_WMOM,hs+k,hs+i] / r                                 # W-wind
       th = ( state[ID_RHOT,hs+k,hs+i] + hy_dens_theta_cell[hs+k] ) / r # Potential Temperature (theta)
-      p  = C0*pow(r*th,gamm)                               # Pressure
-      t  = th / pow(p0/p,rd/cp)                            # Temperature
+      p  = C0*math.pow(r*th,gamm)                               # Pressure
+      t  = th / math.pow(p0/p,rd/cp)                            # Temperature
       ke = r*(u*u+w*w)                                     # Kinetic Energy
       ie = r*cv*t                                          # Internal Energy
       mass += r        *dx*dz # Accumulate domain mass
