@@ -530,7 +530,7 @@ def set_halo_values_x(
       for k in range(nz):
         for i in range(hs):
           z: real = (k_beg + k+0.5)*dz
-          if abs(z-3*zlen/4) <= zlen/16:
+          if math.fabs(z-3*zlen/4) <= zlen/16:
             state[ID_UMOM,hs+k,i] = (state[ID_DENS,hs+k,i] + hy_dens_cell[hs+k]) * 50.0
             state[ID_RHOT,hs+k,i] = (state[ID_DENS,hs+k,i] + hy_dens_cell[hs+k]) * 298.0 - hy_dens_theta_cell[hs+k]
 
@@ -761,9 +761,7 @@ def density_current(x: real, z: real): # returns (r, u, w, t, hr, ht)
   t = 0.0
   u = 0.0
   w = 0.0
-  # FIXME (mfh 2025/03/03) This was originally t = t + ... so perhaps t should also be an input parameter.
-  # On the other hand, t was uninitialized before (which means this was probably incorrect in the original C++).
-  t = sample_ellipse_cosine(x, z, -20.0, xlen/2, 5000.0, 4000.0, 2000.0)
+  t = t + sample_ellipse_cosine(x, z, -20.0, xlen/2, 5000.0, 4000.0, 2000.0)
 
   return (r, u, w, t, hr, ht)
 
@@ -791,9 +789,7 @@ def thermal(x: real, z: real): # returns (r, u, w, t, hr, ht)
   t = 0.0
   u = 0.0
   w = 0.0
-  # FIXME (mfh 2025/03/03) This was originally t = t + ... so perhaps t should also be an input parameter.
-  # On the other hand, t was uninitialized before (which means this was probably incorrect in the original C++).
-  t = sample_ellipse_cosine(x, z, 3.0, xlen/2, 2000.0, 2000.0, 2000.0)
+  t = t + sample_ellipse_cosine(x, z, 3.0, xlen/2, 2000.0, 2000.0, 2000.0)
 
   return (r, u, w, t, hr, ht)
 
