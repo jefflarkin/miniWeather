@@ -808,10 +808,8 @@ def collision(x: real, z: real): # returns (r, u, w, t, hr, ht)
   t = 0.0
   u = 0.0
   w = 0.0
-  # FIXME (mfh 2025/03/03) This was originally t = t + ... so perhaps t should also be an input parameter.
-  # On the other hand, t was uninitialized before (which means this was probably incorrect in the original C++).
-  t = sample_ellipse_cosine(x, z,  20.0, xlen/2, 2000.0, 2000.0, 2000.0) + \
-      sample_ellipse_cosine(x, z, -20.0, xlen/2, 8000.0, 2000.0, 2000.0)
+  t = t + sample_ellipse_cosine(x, z,  20.0, xlen/2, 2000.0, 2000.0, 2000.0)
+  t = t + sample_ellipse_cosine(x, z, -20.0, xlen/2, 8000.0, 2000.0, 2000.0)
 
   return (r, u, w, t, hr, ht)
 
