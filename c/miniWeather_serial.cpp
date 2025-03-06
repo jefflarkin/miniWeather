@@ -194,6 +194,7 @@ int main(int argc, char **argv) {
 // q**    = q[n] + dt/2 * rhs(q*  )
 // q[n+1] = q[n] + dt/1 * rhs(q** )
 void perform_timestep( double *state , double *state_tmp , double *flux , double *tend , double dt ) {
+  printf("direction_switch: %d\n", direction_switch);
   if (direction_switch) {
     //x-direction first
     semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_X , flux , tend );

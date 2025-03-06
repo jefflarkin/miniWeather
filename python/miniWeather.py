@@ -249,7 +249,8 @@ def perform_timestep(
   nx = fixed_data.nx
   nz = fixed_data.nz
 
-  if direction_switch != 0:
+  print(f'direction_switch: {direction_switch}')
+  if direction_switch:
     # x-direction first
     semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, flux, fixed_data)
     semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, flux, fixed_data)
