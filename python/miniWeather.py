@@ -155,10 +155,11 @@ def main() -> None:
   #yakl::init();
 
   # fixed_data: Fixed_data
-  # state: real3d
-  # state_tmp: real3d
+  # state: real3d, NUM_VARS x (nz+2*hs) x (nz+2*hs)
+  # state_tmp: real3d, ditto
+  # flux: real3d, NUM_VARS x (nz+1) x (nx+1)
   # dt: real: Model time step (seconds)
-  (state, state_tmp, fixed_data, dt) = init()
+  (state, state_tmp, flux, fixed_data, dt) = init()
 
   mainproc = fixed_data.mainproc
 
@@ -189,7 +190,7 @@ def main() -> None:
         dt = sim_time - etime
 
       # Perform a single time step
-      direction_switch = perform_timestep(state, state_tmp, dt, direction_switch, fixed_data)
+      direction_switch = perform_timestep(state, state_tmp, flux, dt, direction_switch, fixed_data)
       # Inform the user
       if mainproc:
         print(f"Elapsed Time: {etime}, Simulation Time: {sim_time}")
@@ -238,7 +239,8 @@ def main() -> None:
 #   q_n+1  = q_n + dt/1 * rhs(q**)
 def perform_timestep(
     state, # real3d const&, input parameter
-    state_tmp,
+    state_tmp, # real3d
+    flux, # real3d
     dt, # real, must be an input parameter
     direction_switch, # int&, in/out parameter, transformed to input and return value
     fixed_data # Fixed_data const &, input parameter
@@ -249,22 +251,22 @@ def perform_timestep(
 
   if direction_switch != 0:
     # x-direction first
-    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, fixed_data)
-    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, fixed_data)
-    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_X, fixed_data)
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, flux, fixed_data)
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, flux, fixed_data)
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_X, flux, fixed_data)
     # z-direction second
-    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_Z, fixed_data)
-    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_Z, fixed_data)
-    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_Z, fixed_data)
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_Z, flux, fixed_data)
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_Z, flux, fixed_data)
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_Z, flux, fixed_data)
   else:
     # z-direction second
-    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_Z, fixed_data)
-    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_Z, fixed_data)
-    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_Z, fixed_data)
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_Z, flux, fixed_data)
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_Z, flux, fixed_data)
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_Z, flux, fixed_data)
     # x-direction first
-    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, fixed_data)
-    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, fixed_data)
-    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_X, fixed_data)
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, flux, fixed_data)
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, flux, fixed_data)
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_X, flux, fixed_data)
 
   if direction_switch:
     direction_switch = 0
@@ -284,6 +286,7 @@ def semi_discrete_step(
     state_out, # real3d const&,
     dt: real,
     dir: int,
+    flux, # real3d
     fixed_data # Fixed_data const&
   ) -> None:
 
@@ -302,7 +305,7 @@ def semi_discrete_step(
     #yakl::timer_stop("halo x");
     # Compute the time tendencies for the fluid state in the x-direction
     #yakl::timer_start("tendencies x");
-    compute_tendencies_x(state_forcing, tend, dt, fixed_data)
+    compute_tendencies_x(state_forcing, flux, tend, dt, fixed_data)
     #yakl::timer_stop("tendencies x");
   elif dir == DIR_Z:
     # Set the halo values for this MPI task's fluid state in the z-direction
@@ -311,7 +314,7 @@ def semi_discrete_step(
     #yakl::timer_stop("halo z");
     # Compute the time tendencies for the fluid state in the z-direction
     #yakl::timer_start("tendencies z");
-    compute_tendencies_z(state_forcing, tend, dt, fixed_data)
+    compute_tendencies_z(state_forcing, flux, tend, dt, fixed_data)
     #yakl::timer_stop("tendencies z");
 
   # /////////////////////////////////////////////////
@@ -323,6 +326,9 @@ def semi_discrete_step(
     for k in range(nz):
       for i in range(nx):
         if data_spec_int == DATA_SPEC_GRAVITY_WAVES:
+          print("*** NOT IMPLEMENTED ***");
+          sys.exit(-1);
+          
           x: real = (i_beg + i+0.5)*dx;
           z: real = (k_beg + k+0.5)*dz;
           wpert: real = sample_ellipse_cosine(x, z, 0.01, xlen/8, 1000.0, 500.0, 500.0)
@@ -342,6 +348,7 @@ def semi_discrete_step(
 # Then, compute the tendencies using those fluxes
 def compute_tendencies_x(
     state, # realConst3d
+    flux,
     tend, # real3d const&
     dt, # real
     fixed_data # Fixed_data const&
@@ -351,8 +358,6 @@ def compute_tendencies_x(
   nz                 = fixed_data.nz
   hy_dens_cell       = fixed_data.hy_dens_cell
   hy_dens_theta_cell = fixed_data.hy_dens_theta_cell
-
-  flux = real3d("flux", nx=nx+1, nz=nz, nvars=NUM_VARS)
 
   # Compute the hyperviscosity coefficient
   hv_coef: real = -hv_beta * dx / (16*dt)
@@ -414,6 +419,7 @@ def compute_tendencies_x(
 # Then, compute the tendencies using those fluxes
 def compute_tendencies_z(
     state, # realConst3d
+    flux,
     tend, # real3d const&
     dt, # real
     fixed_data # Fixed_data const&
@@ -424,8 +430,6 @@ def compute_tendencies_z(
   hy_dens_int        = fixed_data.hy_dens_int
   hy_dens_theta_int  = fixed_data.hy_dens_theta_int
   hy_pressure_int    = fixed_data.hy_pressure_int
-
-  flux = real3d("flux", nx=nx, nz=nz+1, nvars=NUM_VARS)
 
   # Compute the hyperviscosity coefficient
   hv_coef: real = -hv_beta * dz / (16*dt);
@@ -569,7 +573,7 @@ def set_halo_values_z(
 
 # state, dt, and fixed_data used to be output parameters.
 # It would be more Pythonic to return them as a tuple.
-def init(): # -> (state: real3d, state_tmp: real3d, dt: real, fixed_data: Fixed_data)
+def init(): # -> (state: real3d, state_tmp: real3d, flux: real3d, dt: real, fixed_data: Fixed_data)
 
   ierr: int = 0
 
@@ -602,6 +606,7 @@ def init(): # -> (state: real3d, state_tmp: real3d, dt: real, fixed_data: Fixed_
   if mainproc:
     print(f"Allocate state: NUM_VARS={NUM_VARS}, nx+2*hs={nx+2*hs}, nz+2*hs={nz+2*hs}")
   state_tmp = real3d("state_tmp", nx=nx+2*hs, nz=nz+2*hs, nvars=NUM_VARS)
+  flux = real3d("flux", nx=nx+1, nz=nz+1, nvars=NUM_VARS)
 
   # Define the maximum stable time step based on an assumed maximum wind speed
   dt: real = min(dx,dz) / max_speed * cfl;
@@ -728,7 +733,7 @@ def init(): # -> (state: real3d, state_tmp: real3d, dt: real, fixed_data: Fixed_
     hy_dens_cell, hy_dens_theta_cell, hy_dens_int,
     hy_dens_theta_int, hy_pressure_int)
 
-  return (state, state_tmp, fixed_data, dt)
+  return (state, state_tmp, flux, fixed_data, dt)
 
 # This test case is initially balanced but injects fast, cold air from the left boundary near the model top
 # x and z are input coordinates at which to sample
