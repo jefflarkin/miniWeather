@@ -132,6 +132,10 @@ int main(int argc, char **argv) {
 
   //Initial reductions for mass, kinetic energy, and total energy
   reductions(mass0,te0);
+  {
+    printf( "mass0: %le\n" , mass0 );
+    printf( "te0:   %le\n" , te0   );
+  }
 
   //Output the initial state
   output(state,etime);
@@ -156,6 +160,13 @@ int main(int argc, char **argv) {
     if (output_counter >= output_freq) {
       output_counter = output_counter - output_freq;
       output(state,etime);
+    }
+    {
+      double mass = 0.0;
+      double te = 0.0;
+      reductions(mass, te);
+      printf( "mass: %le\n" , mass );
+      printf( "te:   %le\n" , te   );
     }
   }
   auto t2 = std::chrono::steady_clock::now();
@@ -722,6 +733,7 @@ double sample_ellipse_cosine( double x , double z , double amp , double x0 , dou
 //The file I/O uses parallel-netcdf, the only external library required for this mini-app.
 //If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
 void output( double *state , double etime ) {
+#if 0
   int ncid, t_dimid, x_dimid, z_dimid, dens_varid, uwnd_varid, wwnd_varid, theta_varid, t_varid, dimids[3];
   int i, k, ind_r, ind_u, ind_w, ind_t;
   MPI_Offset st1[1], ct1[1], st3[3], ct3[3];
@@ -802,16 +814,18 @@ void output( double *state , double etime ) {
 
   //Close the file
   ncwrap( ncmpi_close(ncid) , __LINE__ );
-
+#endif // 0
   //Increment the number of outputs
   num_out = num_out + 1;
 
+#if 0
   //Deallocate the temp arrays
   free( dens     );
   free( uwnd     );
   free( wwnd     );
   free( theta    );
   free( etimearr );
+#endif // 0
 }
 
 

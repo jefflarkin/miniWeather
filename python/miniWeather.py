@@ -163,6 +163,9 @@ def main() -> None:
 
   # Initial reductions for mass, kinetic energy, and total energy
   (mass0, te0) = reductions(state, fixed_data)
+  if mainproc:
+    print(f"mass0: {mass0:.6e}")
+    print(f"te0:   {te0:.6e}")
 
   num_out: int = 0    # The number of outputs performed so far
   etime: real  = 0.0  # Elapsed time
@@ -188,7 +191,7 @@ def main() -> None:
       direction_switch = perform_timestep(state, dt, direction_switch, fixed_data)
       # Inform the user
       if mainproc:
-        print(f"Elapsed Time: {etime}, Simulation Time: {sim_time}\n")
+        print(f"Elapsed Time: {etime}, Simulation Time: {sim_time}")
       # Update the elapsed time and output counter
       etime = etime + dt
       output_counter = output_counter + dt
@@ -196,6 +199,11 @@ def main() -> None:
       if output_freq >= 0 and output_counter >= output_freq:
         output_counter = output_counter - output_freq
       num_out = output(state, etime, num_out, fixed_data)
+
+      (mass, te) = reductions(state, fixed_data)
+      if mainproc:
+        print(f"mass: {mass:.6e}")
+        print(f"te:   {te:.6e}")
 
     return (etime, num_out)
 
@@ -211,8 +219,8 @@ def main() -> None:
   (mass, te) = reductions(state, fixed_data)
 
   if mainproc:
-    print(f"d_mass: {((mass - mass0)/mass0)}")
-    print(f"d_te:   {((te   - te0  )/te0  )}")
+    print(f"d_mass: {((mass - mass0)/mass0):.6e}")
+    print(f"d_te:   {((te   - te0  )/te0  ):.6e}")
 
   finalize()
 
@@ -852,9 +860,6 @@ def output(
     num_out: int,
     fixed_data: Fixed_data
   ) -> int: # num_out (updated)
-
-  if fixed_data.mainproc:
-    print("*** OUTPUT ***\n")
 
   # TODO (mfh 2025/03/04) Actually write to the output file.
 
