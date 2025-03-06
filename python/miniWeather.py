@@ -156,8 +156,9 @@ def main() -> None:
 
   # fixed_data: Fixed_data
   # state: real3d
+  # state_tmp: real3d
   # dt: real: Model time step (seconds)
-  (state, fixed_data, dt) = init()
+  (state, state_tmp, fixed_data, dt) = init()
 
   mainproc = fixed_data.mainproc
 
@@ -188,7 +189,7 @@ def main() -> None:
         dt = sim_time - etime
 
       # Perform a single time step
-      direction_switch = perform_timestep(state, dt, direction_switch, fixed_data)
+      direction_switch = perform_timestep(state, state_tmp, dt, direction_switch, fixed_data)
       # Inform the user
       if mainproc:
         print(f"Elapsed Time: {etime}, Simulation Time: {sim_time}")
@@ -237,6 +238,7 @@ def main() -> None:
 #   q_n+1  = q_n + dt/1 * rhs(q**)
 def perform_timestep(
     state, # real3d const&, input parameter
+    state_tmp,
     dt, # real, must be an input parameter
     direction_switch, # int&, in/out parameter, transformed to input and return value
     fixed_data # Fixed_data const &, input parameter
@@ -244,8 +246,6 @@ def perform_timestep(
 
   nx = fixed_data.nx
   nz = fixed_data.nz
-
-  state_tmp = real3d("state_tmp", nx=nx+2*hs, nz=nz+2*hs, nvars=NUM_VARS)
 
   if direction_switch != 0:
     # x-direction first
@@ -569,7 +569,7 @@ def set_halo_values_z(
 
 # state, dt, and fixed_data used to be output parameters.
 # It would be more Pythonic to return them as a tuple.
-def init(): # -> tuple[real3d, real, Fixed_data]:
+def init(): # -> (state: real3d, state_tmp: real3d, dt: real, fixed_data: Fixed_data)
 
   ierr: int = 0
 
@@ -601,6 +601,7 @@ def init(): # -> tuple[real3d, real, Fixed_data]:
   state = real3d("state", nx=nx+2*hs, nz=nz+2*hs, nvars=NUM_VARS)
   if mainproc:
     print(f"Allocate state: NUM_VARS={NUM_VARS}, nx+2*hs={nx+2*hs}, nz+2*hs={nz+2*hs}")
+  state_tmp = real3d("state_tmp", nx=nx+2*hs, nz=nz+2*hs, nvars=NUM_VARS)
 
   # Define the maximum stable time step based on an assumed maximum wind speed
   dt: real = min(dx,dz) / max_speed * cfl;
@@ -666,6 +667,9 @@ def init(): # -> tuple[real3d, real, Fixed_data]:
           state[ID_WMOM,k,i] += (r+hr)*w                  * qweights[ii]*qweights[kk]
           state[ID_RHOT,k,i] += ( (r+hr)*(t+ht) - hr*ht ) * qweights[ii]*qweights[kk]
 
+      for ll in range(NUM_VARS):
+        state_tmp[ll,k,i] = state[ll,k,i]
+          
   hy_dens_cell       = real1d("hy_dens_cell      ", nz+2*hs)
   hy_dens_theta_cell = real1d("hy_dens_theta_cell", nz+2*hs)
   hy_dens_int        = real1d("hy_dens_int       ", nz+1)
@@ -724,7 +728,7 @@ def init(): # -> tuple[real3d, real, Fixed_data]:
     hy_dens_cell, hy_dens_theta_cell, hy_dens_int,
     hy_dens_theta_int, hy_pressure_int)
 
-  return (state, fixed_data, dt)
+  return (state, state_tmp, fixed_data, dt)
 
 # This test case is initially balanced but injects fast, cold air from the left boundary near the model top
 # x and z are input coordinates at which to sample
