@@ -76,7 +76,8 @@ nz_glob: int = 50               # Number of total cells in the z-direction
 nx_glob: int = 2 * nz_glob      # Number of total cells in the x-direction
 sim_time: real = 20.0 #1000.0         # How many seconds to run the simulation
 output_freq: real = 10.0        # How frequently to output data to file (in seconds)
-data_spec_int: int = DATA_SPEC_INJECTION # How to initialize the data
+#data_spec_int: int = DATA_SPEC_INJECTION # How to initialize the data
+data_spec_int: int = DATA_SPEC_THERMAL # How to initialize the data
 # ///////////////////////////////////////////////////////////////////////////////////////
 # // END USER-CONFIGURABLE PARAMETERS
 # ///////////////////////////////////////////////////////////////////////////////////////
