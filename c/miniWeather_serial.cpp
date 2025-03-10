@@ -133,8 +133,8 @@ int main(int argc, char **argv) {
   //Initial reductions for mass, kinetic energy, and total energy
   reductions(mass0,te0);
   {
-    printf( "mass0: %le\n" , mass0 );
-    printf( "te0:   %le\n" , te0   );
+    fprintf(stderr, "mass0: %le\n" , mass0);
+    fprintf(stderr, "te0:   %le\n" , te0  );
   }
 
   //Output the initial state
@@ -151,7 +151,7 @@ int main(int argc, char **argv) {
     perform_timestep(state,state_tmp,flux,tend,dt);
     //Inform the user
 #ifndef NO_INFORM
-    if (mainproc) { printf( "Elapsed Time: %lf / %lf\n", etime , sim_time ); }
+    if (mainproc) { fprintf(stderr, "Elapsed Time: %lf / %lf\n", etime , sim_time ); }
 #endif
     //Update the elapsed time and output counter
     etime = etime + dt;
@@ -161,25 +161,27 @@ int main(int argc, char **argv) {
       output_counter = output_counter - output_freq;
       output(state,etime);
     }
+#if 0
     {
       double mass = 0.0;
       double te = 0.0;
       reductions(mass, te);
-      printf( "mass: %le\n" , mass );
-      printf( "te:   %le\n" , te   );
+      fprintf(stderr, "mass: %le\n" , mass );
+      fprintf(stderr, "te:   %le\n" , te   );
     }
+#endif // 0
   }
   auto t2 = std::chrono::steady_clock::now();
   if (mainproc) {
-    std::cout << "CPU Time: " << std::chrono::duration<double>(t2-t1).count() << " sec\n";
+    std::cerr << "CPU Time: " << std::chrono::duration<double>(t2-t1).count() << " sec\n";
   }
 
   //Final reductions for mass, kinetic energy, and total energy
   reductions(mass,te);
 
   if (mainproc) {
-    printf( "d_mass: %le\n" , (mass - mass0)/mass0 );
-    printf( "d_te:   %le\n" , (te   - te0  )/te0   );
+    fprintf(stderr, "d_mass: %le\n" , (mass - mass0)/mass0 );
+    fprintf(stderr, "d_te:   %le\n" , (te   - te0  )/te0   );
   }
 
   finalize();
@@ -194,7 +196,7 @@ int main(int argc, char **argv) {
 // q**    = q[n] + dt/2 * rhs(q*  )
 // q[n+1] = q[n] + dt/1 * rhs(q** )
 void perform_timestep( double *state , double *state_tmp , double *flux , double *tend , double dt ) {
-  printf("direction_switch: %d\n", direction_switch);
+  //fprintf(stderr, "direction_switch: %d\n", direction_switch);
   if (direction_switch) {
     //x-direction first
     semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_X , flux , tend );
@@ -535,9 +537,9 @@ void init( int *argc , char ***argv ) {
 
   //If I'm the main process in MPI, display some grid information
   if (mainproc) {
-    printf( "nx_glob, nz_glob: %d %d\n", nx_glob, nz_glob);
-    printf( "dx,dz: %lf %lf\n",dx,dz);
-    printf( "dt: %lf\n",dt);
+    fprintf(stderr, "nx_glob, nz_glob: %d %d\n", nx_glob, nz_glob);
+    fprintf(stderr, "dx,dz: %lf %lf\n",dx,dz);
+    fprintf(stderr, "dt: %lf\n",dt);
   }
   //Want to make sure this info is displayed before further output
   ierr = MPI_Barrier(MPI_COMM_WORLD);
