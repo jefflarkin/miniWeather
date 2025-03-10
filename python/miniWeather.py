@@ -8,10 +8,10 @@
 # //////////////////////////////////////////////////////////////////////////////////////////
 
 import math
-import numpy as np
 import sys
 import timeit
-#include "pnetcdf.h"
+import numpy as np
+from netCDF4 import Dataset
 
 # "real" in the original C++ code could be either float or double.
 real = np.float64 # or np.float32
