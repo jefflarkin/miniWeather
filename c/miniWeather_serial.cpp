@@ -742,7 +742,7 @@ void output( double *state , double etime ) {
   double *dens, *uwnd, *wwnd, *theta;
   double *etimearr;
   //Inform the user
-  if (mainproc) { printf("*** OUTPUT ***\n"); }
+  if (mainproc) { fprintf(stderr, "*** OUTPUT ***\n"); }
   //Allocate some (big) temp arrays
   dens     = (double *) malloc(nx*nz*sizeof(double));
   uwnd     = (double *) malloc(nx*nz*sizeof(double));
@@ -755,7 +755,7 @@ void output( double *state , double etime ) {
   MPI_Info mpi_info;
   auto info_err = MPI_Info_create(&mpi_info);
   if (info_err != MPI_SUCCESS) {
-    printf("Error creating MPI Info object\n");
+    fprintf(stderr, "Error creating MPI Info object\n");
     MPI_Abort(MPI_COMM_WORLD, -1);
   }
 
@@ -769,7 +769,7 @@ void output( double *state , double etime ) {
     ncwrap( ncmpi_def_dim( ncid , "z" , (MPI_Offset) nz_glob      , &z_dimid ) , __LINE__ );
     //Create the variables
     dimids[0] = t_dimid;
-    ncwrap( ncmpi_def_var( ncid , "t"     , NC_DOUBLE , 1 , dimids ,     &t_varid ) , __LINE__ );
+    ncwrap( ncmpi_def_var( ncid , "t_var"     , NC_DOUBLE , 1 , dimids ,     &t_varid ) , __LINE__ );
     dimids[0] = t_dimid; dimids[1] = z_dimid; dimids[2] = x_dimid;
     ncwrap( ncmpi_def_var( ncid , "dens"  , NC_DOUBLE , 3 , dimids ,  &dens_varid ) , __LINE__ );
     ncwrap( ncmpi_def_var( ncid , "uwnd"  , NC_DOUBLE , 3 , dimids ,  &uwnd_varid ) , __LINE__ );
@@ -785,7 +785,7 @@ void output( double *state , double etime ) {
     ncwrap( ncmpi_inq_varid( ncid , "uwnd"  ,  &uwnd_varid ) , __LINE__ );
     ncwrap( ncmpi_inq_varid( ncid , "wwnd"  ,  &wwnd_varid ) , __LINE__ );
     ncwrap( ncmpi_inq_varid( ncid , "theta" , &theta_varid ) , __LINE__ );
-    ncwrap( ncmpi_inq_varid( ncid , "t"     ,     &t_varid ) , __LINE__ );
+    ncwrap( ncmpi_inq_varid( ncid , "t_var" ,     &t_varid ) , __LINE__ );
   }
 
   //Store perturbed values in the temp arrays for output
@@ -817,7 +817,8 @@ void output( double *state , double etime ) {
   if (mainproc) {
     st1[0] = num_out;
     ct1[0] = 1;
-    etimearr[0] = etime; ncwrap( ncmpi_put_vara_double( ncid , t_varid , st1 , ct1 , etimearr ) , __LINE__ );
+    etimearr[0] = etime;
+    ncwrap( ncmpi_put_vara_double( ncid , t_varid , st1 , ct1 , etimearr ) , __LINE__ );
   }
   //End "independent" write mode
   ncwrap( ncmpi_end_indep_data(ncid) , __LINE__ );
@@ -844,9 +845,9 @@ void output( double *state , double etime ) {
 //Error reporting routine for the PNetCDF I/O
 void ncwrap( int ierr , int line ) {
   if (ierr != NC_NOERR) {
-    printf("NetCDF Error at line: %d\n", line);
-    printf("%s\n",ncmpi_strerror(ierr));
-    exit(-1);
+    fprintf(stderr, "NetCDF Error at line: %d\n", line);
+    fprintf(stderr, "%s\n", ncmpi_strerror(ierr));
+    MPI_Abort(MPI_COMM_WORLD, -1);
   }
 }
 
