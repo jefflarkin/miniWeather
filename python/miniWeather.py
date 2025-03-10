@@ -856,7 +856,67 @@ def output(
     fixed_data: Fixed_data
   ) -> int: # num_out (updated)
 
-  # TODO (mfh 2025/03/04) Actually write to the output file.
+  # Get dimensions from fixed_data
+  nx = fixed_data.nx
+  nz = fixed_data.nz
+  i_beg = fixed_data.i_beg 
+  k_beg = fixed_data.k_beg
+  mainproc = fixed_data.mainproc
+  hy_dens_cell = fixed_data.hy_dens_cell
+  hy_dens_theta_cell = fixed_data.hy_dens_theta_cell
+
+  # Inform the user
+  if mainproc:
+    print("*** OUTPUT ***")
+
+  # Allocate temp arrays
+  #
+  # TODO (mfh 2025/03/10) Check output order
+  dens = np.zeros((nz,nx), dtype=real)
+  uwnd = np.zeros((nz,nx), dtype=real) 
+  wwnd = np.zeros((nz,nx), dtype=real)
+  theta = np.zeros((nz,nx), dtype=real)
+  etimearr = np.zeros((1), dtype=real)
+
+  # Store perturbed values in temp arrays
+  for k in range(nz):
+    for i in range(nx):
+      ind_r = ID_DENS*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs
+      ind_u = ID_UMOM*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs
+      ind_w = ID_WMOM*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs
+      ind_t = ID_RHOT*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs
+      dens[k,i] = state[ind_r]
+      uwnd[k,i] = state[ind_u] / (hy_dens_cell[k+hs] + state[ind_r])
+      wwnd[k,i] = state[ind_w] / (hy_dens_cell[k+hs] + state[ind_r])
+      theta[k,i] = (state[ind_t] + hy_dens_theta_cell[k+hs]) / (hy_dens_cell[k+hs] + state[ind_r]) - hy_dens_theta_cell[k+hs] / hy_dens_cell[k+hs]
+
+  with (Dataset("output.nc", "w") if etime == 0 else Dataset("output.nc", "a")) as nc:
+    # Write output using netCDF4
+    if etime == 0:
+      # Create dimensions
+      nc.createDimension("t", None) # unlimited
+      nc.createDimension("x", nx_glob)
+      nc.createDimension("z", nz_glob)
+      # Create variables
+      t_var = nc.createVariable("t_var", real, ("t",))
+      dens_var = nc.createVariable("dens", real, ("t","z","x"))
+      uwnd_var = nc.createVariable("uwnd", real, ("t","z","x"))
+      wwnd_var = nc.createVariable("wwnd", real, ("t","z","x"))
+      theta_var = nc.createVariable("theta", real, ("t","z","x"))
+    else:
+      t_var = nc.variables["t_var"]
+      dens_var = nc.variables["dens"] 
+      uwnd_var = nc.variables["uwnd"]
+      wwnd_var = nc.variables["wwnd"]
+      theta_var = nc.variables["theta"]
+
+    # Write data
+    if mainproc:
+      t_var[num_out] = etime
+    dens_var[num_out,k_beg:k_beg+nz,i_beg:i_beg+nx] = dens
+    uwnd_var[num_out,k_beg:k_beg+nz,i_beg:i_beg+nx] = uwnd  
+    wwnd_var[num_out,k_beg:k_beg+nz,i_beg:i_beg+nx] = wwnd
+    theta_var[num_out,k_beg:k_beg+nz,i_beg:i_beg+nx] = theta
 
   return num_out + 1
 
