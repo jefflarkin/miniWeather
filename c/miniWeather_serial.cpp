@@ -734,7 +734,7 @@ double sample_ellipse_cosine( double x , double z , double amp , double x0 , dou
 //The file I/O uses parallel-netcdf, the only external library required for this mini-app.
 //If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
 void output( double *state , double etime ) {
-#if 0
+#if 1
   int ncid, t_dimid, x_dimid, z_dimid, dens_varid, uwnd_varid, wwnd_varid, theta_varid, t_varid, dimids[3];
   int i, k, ind_r, ind_u, ind_w, ind_t;
   MPI_Offset st1[1], ct1[1], st3[3], ct3[3];
@@ -750,10 +750,19 @@ void output( double *state , double etime ) {
   theta    = (double *) malloc(nx*nz*sizeof(double));
   etimearr = (double *) malloc(1    *sizeof(double));
 
+  // PNetCDF needs an MPI_Info object that is not MPI_INFO_NULL.
+  // It's possible that earlier PNetCDF versions tolerated MPI_INFO_NULL.
+  MPI_Info mpi_info;
+  auto info_err = MPI_Info_create(&mpi_info);
+  if (info_err != MPI_SUCCESS) {
+    printf("Error creating MPI Info object\n");
+    MPI_Abort(MPI_COMM_WORLD, -1);
+  }
+
   //If the elapsed time is zero, create the file. Otherwise, open the file
   if (etime == 0) {
     //Create the file
-    ncwrap( ncmpi_create( MPI_COMM_WORLD , "output.nc" , NC_CLOBBER , MPI_INFO_NULL , &ncid ) , __LINE__ );
+    ncwrap( ncmpi_create( MPI_COMM_WORLD , "output.nc" , NC_CLOBBER , mpi_info , &ncid ) , __LINE__ );
     //Create the dimensions
     ncwrap( ncmpi_def_dim( ncid , "t" , (MPI_Offset) NC_UNLIMITED , &t_dimid ) , __LINE__ );
     ncwrap( ncmpi_def_dim( ncid , "x" , (MPI_Offset) nx_glob      , &x_dimid ) , __LINE__ );
@@ -770,7 +779,7 @@ void output( double *state , double etime ) {
     ncwrap( ncmpi_enddef( ncid ) , __LINE__ );
   } else {
     //Open the file
-    ncwrap( ncmpi_open( MPI_COMM_WORLD , "output.nc" , NC_WRITE , MPI_INFO_NULL , &ncid ) , __LINE__ );
+    ncwrap( ncmpi_open( MPI_COMM_WORLD , "output.nc" , NC_WRITE , mpi_info , &ncid ) , __LINE__ );
     //Get the variable IDs
     ncwrap( ncmpi_inq_varid( ncid , "dens"  ,  &dens_varid ) , __LINE__ );
     ncwrap( ncmpi_inq_varid( ncid , "uwnd"  ,  &uwnd_varid ) , __LINE__ );
@@ -819,7 +828,9 @@ void output( double *state , double etime ) {
   //Increment the number of outputs
   num_out = num_out + 1;
 
-#if 0
+#if 1
+  MPI_Info_free(&mpi_info);
+  
   //Deallocate the temp arrays
   free( dens     );
   free( uwnd     );
