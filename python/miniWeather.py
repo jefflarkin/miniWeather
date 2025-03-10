@@ -74,10 +74,10 @@ sten_size: int = 4
 # So, you'll want to have nx_glob be twice as large as nz_glob
 nz_glob: int = 50               # Number of total cells in the z-direction
 nx_glob: int = 2 * nz_glob      # Number of total cells in the x-direction
-sim_time: real = 20.0 #1000.0         # How many seconds to run the simulation
+sim_time: real = 700.0         # How many seconds to run the simulation
 output_freq: real = 10.0        # How frequently to output data to file (in seconds)
 #data_spec_int: int = DATA_SPEC_INJECTION # How to initialize the data
-data_spec_int: int = DATA_SPEC_THERMAL # How to initialize the data
+data_spec_int: int = DATA_SPEC_COLLISION #DATA_SPEC_THERMAL # How to initialize the data
 # ///////////////////////////////////////////////////////////////////////////////////////
 # // END USER-CONFIGURABLE PARAMETERS
 # ///////////////////////////////////////////////////////////////////////////////////////
@@ -201,7 +201,7 @@ def main() -> None:
       # If it's time for output, reset the counter, and do output
       if output_freq >= 0 and output_counter >= output_freq:
         output_counter = output_counter - output_freq
-      num_out = output(state, etime, num_out, fixed_data)
+        num_out = output(state, etime, num_out, fixed_data)
 
       (mass, te) = reductions(state, fixed_data)
       if mainproc:
