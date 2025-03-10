@@ -881,14 +881,10 @@ def output(
   # Store perturbed values in temp arrays
   for k in range(nz):
     for i in range(nx):
-      ind_r = ID_DENS*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs
-      ind_u = ID_UMOM*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs
-      ind_w = ID_WMOM*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs
-      ind_t = ID_RHOT*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs
-      dens[k,i] = state[ind_r]
-      uwnd[k,i] = state[ind_u] / (hy_dens_cell[k+hs] + state[ind_r])
-      wwnd[k,i] = state[ind_w] / (hy_dens_cell[k+hs] + state[ind_r])
-      theta[k,i] = (state[ind_t] + hy_dens_theta_cell[k+hs]) / (hy_dens_cell[k+hs] + state[ind_r]) - hy_dens_theta_cell[k+hs] / hy_dens_cell[k+hs]
+      dens[k,i] = state[ID_DENS, k+hs, i+hs]
+      uwnd[k,i] = state[ID_UMOM, k+hs, i+hs] / (hy_dens_cell[k+hs] + state[ID_DENS, k+hs, i+hs])
+      wwnd[k,i] = state[ID_WMOM, k+hs, i+hs] / (hy_dens_cell[k+hs] + state[ID_DENS, k+hs, i+hs])
+      theta[k,i] = (state[ID_RHOT, k+hs, i+hs] + hy_dens_theta_cell[k+hs]) / (hy_dens_cell[k+hs] + state[ID_DENS, k+hs, i+hs]) - hy_dens_theta_cell[k+hs] / hy_dens_cell[k+hs]
 
   with (Dataset("output.nc", "w") if etime == 0 else Dataset("output.nc", "a")) as nc:
     # Write output using netCDF4
