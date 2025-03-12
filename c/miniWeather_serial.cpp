@@ -16,6 +16,8 @@
 #include "pnetcdf.h"
 #include <chrono>
 
+#define MINIWEATHER_ONLY_OUTPUT_THETA 1
+
 constexpr double pi        = 3.14159265358979323846264338327;   //Pi
 constexpr double grav      = 9.8;                               //Gravitational acceleration (m / s^2)
 constexpr double cp        = 1004.;                             //Specific heat of dry air at constant pressure
@@ -748,9 +750,11 @@ void output( double *state , double etime ) {
   //Inform the user
   if (mainproc) { fprintf(stderr, "*** OUTPUT ***\n"); }
   //Allocate some (big) temp arrays
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
   dens     = (double *) malloc(nx*nz*sizeof(double));
   uwnd     = (double *) malloc(nx*nz*sizeof(double));
   wwnd     = (double *) malloc(nx*nz*sizeof(double));
+#endif
   theta    = (double *) malloc(nx*nz*sizeof(double));
   etimearr = (double *) malloc(1    *sizeof(double));
 
@@ -775,9 +779,11 @@ void output( double *state , double etime ) {
     dimids[0] = t_dimid;
     ncwrap( ncmpi_def_var( ncid , "t_var"     , NC_DOUBLE , 1 , dimids ,     &t_varid ) , __LINE__ );
     dimids[0] = t_dimid; dimids[1] = z_dimid; dimids[2] = x_dimid;
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
     ncwrap( ncmpi_def_var( ncid , "dens"  , NC_DOUBLE , 3 , dimids ,  &dens_varid ) , __LINE__ );
     ncwrap( ncmpi_def_var( ncid , "uwnd"  , NC_DOUBLE , 3 , dimids ,  &uwnd_varid ) , __LINE__ );
     ncwrap( ncmpi_def_var( ncid , "wwnd"  , NC_DOUBLE , 3 , dimids ,  &wwnd_varid ) , __LINE__ );
+#endif
     ncwrap( ncmpi_def_var( ncid , "theta" , NC_DOUBLE , 3 , dimids , &theta_varid ) , __LINE__ );
     //End "define" mode
     ncwrap( ncmpi_enddef( ncid ) , __LINE__ );
@@ -785,9 +791,11 @@ void output( double *state , double etime ) {
     //Open the file
     ncwrap( ncmpi_open( MPI_COMM_WORLD , "output.nc" , NC_WRITE , mpi_info , &ncid ) , __LINE__ );
     //Get the variable IDs
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
     ncwrap( ncmpi_inq_varid( ncid , "dens"  ,  &dens_varid ) , __LINE__ );
     ncwrap( ncmpi_inq_varid( ncid , "uwnd"  ,  &uwnd_varid ) , __LINE__ );
     ncwrap( ncmpi_inq_varid( ncid , "wwnd"  ,  &wwnd_varid ) , __LINE__ );
+#endif
     ncwrap( ncmpi_inq_varid( ncid , "theta" , &theta_varid ) , __LINE__ );
     ncwrap( ncmpi_inq_varid( ncid , "t_var" ,     &t_varid ) , __LINE__ );
   }
@@ -796,12 +804,16 @@ void output( double *state , double etime ) {
   for (k=0; k<nz; k++) {
     for (i=0; i<nx; i++) {
       ind_r = ID_DENS*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)      
       ind_u = ID_UMOM*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
       ind_w = ID_WMOM*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
+#endif
       ind_t = ID_RHOT*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
       dens [k*nx+i] = state[ind_r];
       uwnd [k*nx+i] = state[ind_u] / ( hy_dens_cell[k+hs] + state[ind_r] );
       wwnd [k*nx+i] = state[ind_w] / ( hy_dens_cell[k+hs] + state[ind_r] );
+#endif      
       theta[k*nx+i] = ( state[ind_t] + hy_dens_theta_cell[k+hs] ) / ( hy_dens_cell[k+hs] + state[ind_r] ) - hy_dens_theta_cell[k+hs] / hy_dens_cell[k+hs];
     }
   }
@@ -809,9 +821,11 @@ void output( double *state , double etime ) {
   //Write the grid data to file with all the processes writing collectively
   st3[0] = num_out; st3[1] = k_beg; st3[2] = i_beg;
   ct3[0] = 1      ; ct3[1] = nz   ; ct3[2] = nx   ;
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)      
   ncwrap( ncmpi_put_vara_double_all( ncid ,  dens_varid , st3 , ct3 , dens  ) , __LINE__ );
   ncwrap( ncmpi_put_vara_double_all( ncid ,  uwnd_varid , st3 , ct3 , uwnd  ) , __LINE__ );
   ncwrap( ncmpi_put_vara_double_all( ncid ,  wwnd_varid , st3 , ct3 , wwnd  ) , __LINE__ );
+#endif
   ncwrap( ncmpi_put_vara_double_all( ncid , theta_varid , st3 , ct3 , theta ) , __LINE__ );
 
   //Only the main process needs to write the elapsed time
@@ -837,9 +851,11 @@ void output( double *state , double etime ) {
   MPI_Info_free(&mpi_info);
   
   //Deallocate the temp arrays
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)      
   free( dens     );
   free( uwnd     );
   free( wwnd     );
+#endif
   free( theta    );
   free( etimearr );
 #endif // 0
