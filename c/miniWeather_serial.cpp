@@ -56,11 +56,13 @@ constexpr double qweights[] = { 0.277777777777777777777777777779E0 , 0.444444444
 ///////////////////////////////////////////////////////////////////////////////////////
 //The x-direction length is twice as long as the z-direction length
 //So, you'll want to have nx_glob be twice as large as nz_glob
-int    constexpr nx_glob       = _NX;            //Number of total cells in the x-direction
-int    constexpr nz_glob       = _NZ;            //Number of total cells in the z-direction
-double constexpr sim_time      = _SIM_TIME;      //How many seconds to run the simulation
-double constexpr output_freq   = _OUT_FREQ;      //How frequently to output data to file (in seconds)
-int    constexpr data_spec_int = _DATA_SPEC;     //How to initialize the data
+
+int    constexpr nz_glob       = 1000;          //Number of total cells in the z-direction
+int    constexpr nx_glob       = 2 * nz_glob;   //Number of total cells in the x-direction
+double constexpr sim_time      = 700.0;      //How many seconds to run the simulation
+double constexpr output_freq   = 10.0;      //How frequently to output data to file (in seconds)
+//int    constexpr data_spec_int = _DATA_SPEC;     //How to initialize the data
+int    constexpr data_spec_int = DATA_SPEC_COLLISION;     //How to initialize the data
 double constexpr dx            = xlen / nx_glob; // grid spacing in the x-direction
 double constexpr dz            = zlen / nz_glob; // grid spacing in the x-direction
 ///////////////////////////////////////////////////////////////////////////////////////
