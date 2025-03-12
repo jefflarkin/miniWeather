@@ -1,0 +1,25 @@
+#!/bin/bash
+
+SRC_ROOT=../../../src/miniWeather/c
+OPT_FLAGS="-g -O2"
+
+#PNETCDF_LIB=/usr/lib/x86_64-linux-gnu
+#PNETCDF_LDFLAGS="-L${PNETCDF_LIB} -lpnetcdf"
+PNETCDF_LDFLAGS="-lpnetcdf"
+#PNETCDF_CXXFLAGS="-I$/usr/include"
+PNETCDF_CXXFLAGS=""
+
+DATA_SPEC="DATA_SPEC_INJECTION"
+
+cmake \
+  -DCMAKE_CXX_COMPILER=mpic++ \
+  -DCMAKE_C_COMPILER=mpicc \
+  -DCMAKE_Fortran_COMPILER=mpif90 \
+  -DCXXFLAGS="${OPT_FLAGS} ${PNETCDF_CXXFLAGS}" \
+  -DLDFLAGS="${PNETCDF_LDFLAGS}" \
+  -DNX=200 \
+  -DNZ=100 \
+  -DSIM_TIME=1200 \
+  -DOUT_FREQ=10 \
+  -DDATA_SPEC="${DATA_SPEC}" \
+  ${SRC_ROOT}

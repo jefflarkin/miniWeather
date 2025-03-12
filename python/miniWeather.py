@@ -74,10 +74,10 @@ sten_size: int = 4
 # So, you'll want to have nx_glob be twice as large as nz_glob
 nz_glob: int = 50               # Number of total cells in the z-direction
 nx_glob: int = 2 * nz_glob      # Number of total cells in the x-direction
-sim_time: real = 700.0         # How many seconds to run the simulation
+sim_time: real = 1000.0         # How many seconds to run the simulation
 output_freq: real = 10.0        # How frequently to output data to file (in seconds)
-#data_spec_int: int = DATA_SPEC_INJECTION # How to initialize the data
-data_spec_int: int = DATA_SPEC_COLLISION #DATA_SPEC_THERMAL # How to initialize the data
+data_spec_int: int = DATA_SPEC_INJECTION # How to initialize the data
+#data_spec_int: int = DATA_SPEC_COLLISION #DATA_SPEC_THERMAL # How to initialize the data
 # ///////////////////////////////////////////////////////////////////////////////////////
 # // END USER-CONFIGURABLE PARAMETERS
 # ///////////////////////////////////////////////////////////////////////////////////////
@@ -507,10 +507,18 @@ def set_halo_values_x(
   # //////////////////////////////////////////////////////
   for ll in range(NUM_VARS):
     for k in range(nz):
-      state[ll,hs+k,0      ] = state[ll,hs+k,nx+hs-2];
-      state[ll,hs+k,1      ] = state[ll,hs+k,nx+hs-1];
-      state[ll,hs+k,nx+hs  ] = state[ll,hs+k,hs     ];
-      state[ll,hs+k,nx+hs+1] = state[ll,hs+k,hs+1   ];
+      if data_spec_int == DATA_SPEC_INJECTION:
+        # Dirichlet boundary on the right ONLY avoids
+        # spurious reflections on the right and four corners.
+        # This should not be considered physical and does not
+        # conserve energy (but injection doesn't anyway).
+        state[ll,hs+k,nx+hs  ] = 0.0
+        state[ll,hs+k,nx+hs+1] = 0.0
+      else:
+        state[ll,hs+k,0      ] = state[ll,hs+k,nx+hs-2]
+        state[ll,hs+k,1      ] = state[ll,hs+k,nx+hs-1]
+        state[ll,hs+k,nx+hs  ] = state[ll,hs+k,hs     ]
+        state[ll,hs+k,nx+hs+1] = state[ll,hs+k,hs+1   ]
 
   if data_spec_int == DATA_SPEC_INJECTION:
     if myrank == 0:
