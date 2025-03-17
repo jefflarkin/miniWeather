@@ -510,25 +510,10 @@ def set_halo_values_x(
   # //////////////////////////////////////////////////////
   for ll in range(NUM_VARS):
     for k in range(nz):
-      if data_spec_int == DATA_SPEC_INJECTION:
-        # Dirichlet boundary on the right ONLY avoids
-        # spurious reflections on the right and four corners.
-        # This should not be considered physical and does not
-        # conserve energy (but injection doesn't anyway).
-
-        state[ll,hs+k,0      ] = state[ll,hs+k,nx+hs-2]
-        state[ll,hs+k,1      ] = state[ll,hs+k,nx+hs-1]
-        state[ll,hs+k,nx+hs  ] = 0.0
-        state[ll,hs+k,nx+hs+1] = 0.0
-
-        #state[ll,hs+k,nx+hs  ] = state[ll,hs+k,hs     ]
-        #state[ll,hs+k,nx+hs+1] = state[ll,hs+k,hs+1   ]
-
-      else:
-        state[ll,hs+k,0      ] = state[ll,hs+k,nx+hs-2]
-        state[ll,hs+k,1      ] = state[ll,hs+k,nx+hs-1]
-        state[ll,hs+k,nx+hs  ] = state[ll,hs+k,hs     ]
-        state[ll,hs+k,nx+hs+1] = state[ll,hs+k,hs+1   ]
+      state[ll,hs+k,0      ] = state[ll,hs+k,nx+hs-2]
+      state[ll,hs+k,1      ] = state[ll,hs+k,nx+hs-1]
+      state[ll,hs+k,nx+hs  ] = state[ll,hs+k,hs     ]
+      state[ll,hs+k,nx+hs+1] = state[ll,hs+k,hs+1   ]
 
   if data_spec_int == DATA_SPEC_INJECTION:
     if myrank == 0:
