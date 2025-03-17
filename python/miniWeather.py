@@ -17,6 +17,9 @@ from netCDF4 import Dataset
 real = np.float64 # or np.float32
 double = np.float64
 
+# Only output the temperature density ("theta")
+miniweather_output_only_theta: bool = True
+
 #
 # Parameters for indexing and flags
 # (effectively enums, but we leave them as constants
@@ -72,7 +75,7 @@ sten_size: int = 4
 # ///////////////////////////////////////////////////////////////////////////////////////
 # The x-direction length is twice as long as the z-direction length
 # So, you'll want to have nx_glob be twice as large as nz_glob
-nz_glob: int = 50               # Number of total cells in the z-direction
+nz_glob: int = 100              # Number of total cells in the z-direction
 nx_glob: int = 2 * nz_glob      # Number of total cells in the x-direction
 sim_time: real = 1000.0         # How many seconds to run the simulation
 output_freq: real = 10.0        # How frequently to output data to file (in seconds)
@@ -512,8 +515,15 @@ def set_halo_values_x(
         # spurious reflections on the right and four corners.
         # This should not be considered physical and does not
         # conserve energy (but injection doesn't anyway).
+
+        state[ll,hs+k,0      ] = state[ll,hs+k,nx+hs-2]
+        state[ll,hs+k,1      ] = state[ll,hs+k,nx+hs-1]
         state[ll,hs+k,nx+hs  ] = 0.0
         state[ll,hs+k,nx+hs+1] = 0.0
+
+        #state[ll,hs+k,nx+hs  ] = state[ll,hs+k,hs     ]
+        #state[ll,hs+k,nx+hs+1] = state[ll,hs+k,hs+1   ]
+
       else:
         state[ll,hs+k,0      ] = state[ll,hs+k,nx+hs-2]
         state[ll,hs+k,1      ] = state[ll,hs+k,nx+hs-1]
@@ -880,18 +890,20 @@ def output(
   # Allocate temp arrays
   #
   # TODO (mfh 2025/03/10) Check output order
-  dens = np.zeros((nz,nx), dtype=real)
-  uwnd = np.zeros((nz,nx), dtype=real) 
-  wwnd = np.zeros((nz,nx), dtype=real)
+  if not miniweather_output_only_theta:
+    dens = np.zeros((nz,nx), dtype=real)
+    uwnd = np.zeros((nz,nx), dtype=real) 
+    wwnd = np.zeros((nz,nx), dtype=real)
   theta = np.zeros((nz,nx), dtype=real)
   etimearr = np.zeros((1), dtype=real)
 
   # Store perturbed values in temp arrays
   for k in range(nz):
     for i in range(nx):
-      dens[k,i] = state[ID_DENS, k+hs, i+hs]
-      uwnd[k,i] = state[ID_UMOM, k+hs, i+hs] / (hy_dens_cell[k+hs] + state[ID_DENS, k+hs, i+hs])
-      wwnd[k,i] = state[ID_WMOM, k+hs, i+hs] / (hy_dens_cell[k+hs] + state[ID_DENS, k+hs, i+hs])
+      if not miniweather_output_only_theta:
+        dens[k,i] = state[ID_DENS, k+hs, i+hs]
+        uwnd[k,i] = state[ID_UMOM, k+hs, i+hs] / (hy_dens_cell[k+hs] + state[ID_DENS, k+hs, i+hs])
+        wwnd[k,i] = state[ID_WMOM, k+hs, i+hs] / (hy_dens_cell[k+hs] + state[ID_DENS, k+hs, i+hs])
       theta[k,i] = (state[ID_RHOT, k+hs, i+hs] + hy_dens_theta_cell[k+hs]) / (hy_dens_cell[k+hs] + state[ID_DENS, k+hs, i+hs]) - hy_dens_theta_cell[k+hs] / hy_dens_cell[k+hs]
 
   with (Dataset("output.nc", "w") if etime == 0 else Dataset("output.nc", "a")) as nc:
@@ -903,23 +915,27 @@ def output(
       nc.createDimension("z", nz_glob)
       # Create variables
       t_var = nc.createVariable("t_var", real, ("t",))
-      dens_var = nc.createVariable("dens", real, ("t","z","x"))
-      uwnd_var = nc.createVariable("uwnd", real, ("t","z","x"))
-      wwnd_var = nc.createVariable("wwnd", real, ("t","z","x"))
+      if not miniweather_output_only_theta:
+        dens_var = nc.createVariable("dens", real, ("t","z","x"))
+        uwnd_var = nc.createVariable("uwnd", real, ("t","z","x"))
+        wwnd_var = nc.createVariable("wwnd", real, ("t","z","x"))
       theta_var = nc.createVariable("theta", real, ("t","z","x"))
     else:
       t_var = nc.variables["t_var"]
-      dens_var = nc.variables["dens"] 
-      uwnd_var = nc.variables["uwnd"]
-      wwnd_var = nc.variables["wwnd"]
+      if not miniweather_output_only_theta:
+        dens_var = nc.variables["dens"] 
+        uwnd_var = nc.variables["uwnd"]
+        wwnd_var = nc.variables["wwnd"]
       theta_var = nc.variables["theta"]
 
     # Write data
     if mainproc:
       t_var[num_out] = etime
-    dens_var[num_out,k_beg:k_beg+nz,i_beg:i_beg+nx] = dens
-    uwnd_var[num_out,k_beg:k_beg+nz,i_beg:i_beg+nx] = uwnd  
-    wwnd_var[num_out,k_beg:k_beg+nz,i_beg:i_beg+nx] = wwnd
+
+    if not miniweather_output_only_theta:
+      dens_var[num_out,k_beg:k_beg+nz,i_beg:i_beg+nx] = dens
+      uwnd_var[num_out,k_beg:k_beg+nz,i_beg:i_beg+nx] = uwnd  
+      wwnd_var[num_out,k_beg:k_beg+nz,i_beg:i_beg+nx] = wwnd
     theta_var[num_out,k_beg:k_beg+nz,i_beg:i_beg+nx] = theta
 
   return num_out + 1
