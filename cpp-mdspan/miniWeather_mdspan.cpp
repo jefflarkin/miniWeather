@@ -17,6 +17,7 @@
 #include <chrono>
 
 #include "mdspan/mdspan.hpp"
+#include "unique_mdarray.hpp"
 
 #define MINIWEATHER_ONLY_OUTPUT_THETA 1
 

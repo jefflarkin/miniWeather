@@ -4,10 +4,10 @@ project(miniWeather-mdspan
   LANGUAGES CXX
 )
 
-# Option to override which C++ standard to use
-set(MINIWEATHER_CXX_STANDARD DETECT CACHE STRING "Override the default CXX_STANDARD to compile with.")
+# Option to override which version of the C++ Standard to use
+set(MINIWEATHER_CXX_STANDARD DETECT CACHE STRING "Override the default CXX_STANDARD")
 
-# Decide on the standard to use
+# Decide which version of the C++ Standard version to use
 if(MINIWEATHER_CXX_STANDARD STREQUAL "17")
   if("cxx_std_17" IN_LIST CMAKE_CXX_COMPILE_FEATURES)
     message(STATUS "Using C++17 standard")
@@ -60,11 +60,10 @@ if (NOT mdspan_FOUND)
   endif()
 endif()
 
-############################################################
-## Compile the serial version
-############################################################
+# Add mdspan include directory
+include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include" "${mdspan_SOURCE_DIR}/include")
+
 add_executable(serial miniWeather_mdspan.cpp)
-include_directories(${mdspan_SOURCE_DIR}/include)
 target_link_libraries(serial INTERFACE std::mdspan)
 target_compile_options(serial PRIVATE
   $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
@@ -73,5 +72,13 @@ target_compile_options(serial PRIVATE
     /W4>
 )
 
+add_executable(test_unique_mdarray test_unique_mdarray.cpp)
+target_link_libraries(test_unique_mdarray INTERFACE std::mdspan)
+target_compile_options(test_unique_mdarray PRIVATE
+  $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+    -Wall>
+  $<$<CXX_COMPILER_ID:MSVC>:
+    /W4>
+)
 
 
