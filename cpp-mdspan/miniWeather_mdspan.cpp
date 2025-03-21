@@ -16,6 +16,8 @@
 #include "pnetcdf.h"
 #include <chrono>
 
+#include "mdspan/mdspan.hpp"
+
 #define MINIWEATHER_ONLY_OUTPUT_THETA 1
 
 constexpr double pi        = 3.14159265358979323846264338327;   //Pi

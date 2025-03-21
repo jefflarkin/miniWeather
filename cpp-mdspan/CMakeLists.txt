@@ -64,11 +64,8 @@ endif()
 ## Compile the serial version
 ############################################################
 add_executable(serial miniWeather_mdspan.cpp)
+include_directories(${mdspan_SOURCE_DIR}/include)
 target_link_libraries(serial INTERFACE std::mdspan)
-target_include_directories(serial INTERFACE
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include/experimental>
-  $<INSTALL_INTERFACE:include>
-)
 target_compile_options(serial PRIVATE
   $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
     -Wall>
