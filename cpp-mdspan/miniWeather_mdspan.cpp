@@ -245,27 +245,27 @@ void perform_timestep( double *state , double *state_tmp , double *flux , double
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
 void semi_discrete_step( double *state_init , double *state_forcing , double *state_out , double dt , int dir , double *flux , double *tend ) {
-  int i, k, ll, inds, indt, indw;
+  int inds, indt, indw;
   double x, z, wpert, dist, x0, z0, xrad, zrad, amp;
   if        (dir == DIR_X) {
     //Set the halo values for this MPI task's fluid state in the x-direction
     set_halo_values_x(state_forcing);
     //Compute the time tendencies for the fluid state in the x-direction
-    compute_tendencies_x(state_forcing,flux,tend,dt);
+    compute_tendencies_x(state_forcing, flux, tend, dt);
   } else if (dir == DIR_Z) {
     //Set the halo values for this MPI task's fluid state in the z-direction
     set_halo_values_z(state_forcing);
     //Compute the time tendencies for the fluid state in the z-direction
-    compute_tendencies_z(state_forcing,flux,tend,dt);
+    compute_tendencies_z(state_forcing, flux, tend, dt);
   }
 
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Apply the tendencies to the fluid state
-  for (ll=0; ll<NUM_VARS; ll++) {
-    for (k=0; k<nz; k++) {
-      for (i=0; i<nx; i++) {
+  for (int ll = 0; ll < NUM_VARS; ++ll) {
+    for (int k = 0; k < nz; ++k) {
+      for (int i = 0; i < nx; ++i) {
         if (data_spec_int == DATA_SPEC_GRAVITY_WAVES) {
           x = (i_beg + i+0.5)*dx;
           z = (k_beg + k+0.5)*dz;
@@ -428,9 +428,9 @@ void compute_tendencies_z( double *state , double *flux , double *tend , double 
 
 
 //Set this MPI task's halo values in the x-direction. This routine will require MPI
-void set_halo_values_x( double *state ) {
-  int k, ll, ind_r, ind_u, ind_t, i;
-  double z;
+void set_halo_values_x( double* state_ptr ) {
+  auto state = view_3d(state_ptr, NUM_VARS, (nz+2*hs), (nx+2*hs));
+
   ////////////////////////////////////////////////////////////////////////
   // TODO: EXCHANGE HALO VALUES WITH NEIGHBORING MPI TASKS
   // (1) give    state(1:hs,1:nz,1:NUM_VARS)       to   my left  neighbor
@@ -442,27 +442,24 @@ void set_halo_values_x( double *state ) {
   //////////////////////////////////////////////////////
   // DELETE THE SERIAL CODE BELOW AND REPLACE WITH MPI
   //////////////////////////////////////////////////////
-  for (ll=0; ll<NUM_VARS; ll++) {
-    for (k=0; k<nz; k++) {
-      state[ll*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + 0      ] = state[ll*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + nx+hs-2];
-      state[ll*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + 1      ] = state[ll*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + nx+hs-1];
-      state[ll*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + nx+hs  ] = state[ll*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + hs     ];
-      state[ll*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + nx+hs+1] = state[ll*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + hs+1   ];
+  for (int ll = 0; ll < NUM_VARS; ++ll) {
+    for (int k = 0; k < nz; ++k) {
+      state(ll, k+hs, 0) = state(ll, k+hs, nx+hs-2);
+      state(ll, k+hs, 1) = state(ll, k+hs, nx+hs-1);
+      state(ll, k+hs, nx+hs) = state(ll, k+hs, hs);
+      state(ll, k+hs, nx+hs+1) = state(ll, k+hs, hs+1);
     }
   }
   ////////////////////////////////////////////////////
 
   if (data_spec_int == DATA_SPEC_INJECTION) {
     if (myrank == 0) {
-      for (k=0; k<nz; k++) {
-        for (i=0; i<hs; i++) {
-          z = (k_beg + k+0.5)*dz;
+      for (int k = 0; k < nz; ++k) {
+        for (int i = 0; i < hs; ++i) {
+          const double z = (k_beg + k+0.5)*dz;
           if (fabs(z-3*zlen/4) <= zlen/16) {
-            ind_r = ID_DENS*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i;
-            ind_u = ID_UMOM*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i;
-            ind_t = ID_RHOT*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i;
-            state[ind_u] = (state[ind_r]+hy_dens_cell[k+hs]) * 50.;
-            state[ind_t] = (state[ind_r]+hy_dens_cell[k+hs]) * 298. - hy_dens_theta_cell[k+hs];
+            state(ID_UMOM, k+hs, i) = (state(ID_DENS, k+hs, i)+hy_dens_cell[k+hs]) * 50.;
+            state(ID_RHOT, k+hs, i) = (state(ID_DENS, k+hs, i)+hy_dens_cell[k+hs]) * 298. - hy_dens_theta_cell[k+hs];
           }
         }
       }
