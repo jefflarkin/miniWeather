@@ -303,22 +303,22 @@ void semi_discrete_step( double *state_init , double *state_forcing , double *st
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-void compute_tendencies_x( double *state , double *flux , double *tend , double dt) {
-  int    i,k,ll,s,inds,indf1,indf2,indt;
-  double r,u,w,t,p, stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS], hv_coef;
+void compute_tendencies_x(double* state_ptr, double* flux, double* tend, double dt) {
+  auto state = view_3d(state_ptr, NUM_VARS, (nz+2*hs), (nx+2*hs));
+
+  double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS], hv_coef;
   //Compute the hyperviscosity coefficient
   hv_coef = -hv_beta * dx / (16*dt);
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Compute fluxes in the x-direction for each cell
-  for (k=0; k<nz; k++) {
-    for (i=0; i<nx+1; i++) {
+  for (int k = 0; k < nz; ++k) {
+    for (int i = 0; i < nx+1; ++i) {
       //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
-      for (ll=0; ll<NUM_VARS; ll++) {
-        for (s=0; s < sten_size; s++) {
-          inds = ll*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+s;
-          stencil[s] = state[inds];
+      for (int ll = 0; ll < NUM_VARS; ++ll) {
+        for (int s = 0; s < sten_size; ++s) {
+          stencil[s] = state(ll, k+hs, i+s);
         }
         //Fourth-order-accurate interpolation of the state
         vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
@@ -327,11 +327,11 @@ void compute_tendencies_x( double *state , double *flux , double *tend , double 
       }
 
       //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-      r = vals[ID_DENS] + hy_dens_cell[k+hs];
-      u = vals[ID_UMOM] / r;
-      w = vals[ID_WMOM] / r;
-      t = ( vals[ID_RHOT] + hy_dens_theta_cell[k+hs] ) / r;
-      p = C0*pow((r*t),gamm);
+      double r = vals[ID_DENS] + hy_dens_cell[k+hs];
+      double u = vals[ID_UMOM] / r;
+      double w = vals[ID_WMOM] / r;
+      double t = ( vals[ID_RHOT] + hy_dens_theta_cell[k+hs] ) / r;
+      double p = C0 * pow(r*t, gamm);
 
       //Compute the flux vector
       flux[ID_DENS*(nz+1)*(nx+1) + k*(nx+1) + i] = r*u     - hv_coef*d3_vals[ID_DENS];
@@ -345,12 +345,12 @@ void compute_tendencies_x( double *state , double *flux , double *tend , double 
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Use the fluxes to compute tendencies for each cell
-  for (ll=0; ll<NUM_VARS; ll++) {
-    for (k=0; k<nz; k++) {
-      for (i=0; i<nx; i++) {
-        indt  = ll* nz   * nx    + k* nx    + i  ;
-        indf1 = ll*(nz+1)*(nx+1) + k*(nx+1) + i  ;
-        indf2 = ll*(nz+1)*(nx+1) + k*(nx+1) + i+1;
+  for (int ll = 0; ll < NUM_VARS; ++ll) {
+    for (int k = 0; k < nz; ++k) {
+      for (int i = 0; i < nx; ++i) {
+        int indt  = ll* nz   * nx    + k* nx    + i  ;
+        int indf1 = ll*(nz+1)*(nx+1) + k*(nx+1) + i  ;
+        int indf2 = ll*(nz+1)*(nx+1) + k*(nx+1) + i+1;
         tend[indt] = -( flux[indf2] - flux[indf1] ) / dx;
       }
     }
