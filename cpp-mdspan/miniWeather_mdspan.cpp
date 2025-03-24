@@ -93,6 +93,13 @@ std::unique_ptr<double[]> hy_pressure_int;      //hydrostatic press (vert cell i
 ///////////////////////////////////////////////////////////////////////////////////////
 double etime;                 //Elapsed model time
 double output_counter;        //Helps determine when it's time to do output
+
+namespace md {
+  using MDSPAN_IMPL_STANDARD_NAMESPACE :: MDSPAN_IMPL_PROPOSED_NAMESPACE :: dims;
+} // namespace md
+using alloc_3d = md::unique_mdarray<double, md::dims<3>, md::layout_right>;
+using view_3d = md::mdspan<double, md::dims<3>, md::layout_right>;
+
 //Runtime variable arrays
 //
 // C indexing seems to prefer the extents in reverse order.
@@ -102,19 +109,12 @@ double output_counter;        //Helps determine when it's time to do output
 //
 // state extents: NUM_VARS, (nz+2*hs), (nx+2*hs)
 //
-std::unique_ptr<double[]> state;     //Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
-std::unique_ptr<double[]> state_tmp; //Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
+alloc_3d state;      //Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
+alloc_3d state_tmp;  //Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
 std::unique_ptr<double[]> flux;      //Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
 std::unique_ptr<double[]> tend;      //Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
 int    num_out = 0;           //The number of outputs performed so far
 int    direction_switch = 1;
-
-namespace md {
-  using MDSPAN_IMPL_STANDARD_NAMESPACE :: layout_left;
-  using MDSPAN_IMPL_STANDARD_NAMESPACE :: MDSPAN_IMPL_PROPOSED_NAMESPACE :: dims;
-} // namespace md
-
-using view_3d = md::mdspan<double, md::dims<3>, md::layout_right>;
 
 //Declaring the functions defined after "main"
 void   init                 ( int *argc , char ***argv );
@@ -159,8 +159,8 @@ int main(int argc, char **argv) {
     fprintf(stderr, "mass0: %le\n" , mass0);
     fprintf(stderr, "te0:   %le\n" , te0  );
   }
-  auto state_view = view_3d(state.get(), NUM_VARS, (nz+2*hs), (nx+2*hs));
-  auto state_tmp_view = view_3d(state_tmp.get(), NUM_VARS, (nz+2*hs), (nx+2*hs));
+  auto state_view = view_3d(state.get(), NUM_VARS, nz+2*hs, nx+2*hs);
+  auto state_tmp_view = view_3d(state_tmp.get(), NUM_VARS, nz+2*hs, nx+2*hs);
 
   //Output the initial state
   output(state_view, etime);
@@ -496,7 +496,6 @@ void set_halo_values_z(view_3d state) {
 
 
 void init( int *argc , char ***argv ) {
-  int    i, k, ii, kk, ll, inds;
   double x, z, r, u, w, t, hr, ht;
 
   (void) MPI_Init(argc,argv);
@@ -532,8 +531,11 @@ void init( int *argc , char ***argv ) {
   mainproc = (myrank == 0);
 
   //Allocate the model data
-  state              = std::make_unique<double[]>( (nx+2*hs)*(nz+2*hs)*NUM_VARS );
-  state_tmp          = std::make_unique<double[]>( (nx+2*hs)*(nz+2*hs)*NUM_VARS );
+  {
+    auto state_mapping = md::layout_right::template mapping<md::dims<3>>{md::dims<3>{NUM_VARS, nz+2*hs, nx+2*hs}};
+    state              = md::make_unique_mdarray<double>(state_mapping);
+    state_tmp          = md::make_unique_mdarray<double>(state_mapping);
+  }
   flux               = std::make_unique<double[]>( (nx+1)*(nz+1)*NUM_VARS );
   tend               = std::make_unique<double[]>( nx*nz*NUM_VARS );
   hy_dens_cell       = std::make_unique<double[]>( (nz+2*hs) );
@@ -560,16 +562,15 @@ void init( int *argc , char ***argv ) {
   //////////////////////////////////////////////////////////////////////////
   // Initialize the cell-averaged fluid state via Gauss-Legendre quadrature
   //////////////////////////////////////////////////////////////////////////
-  for (k=0; k<nz+2*hs; k++) {
-    for (i=0; i<nx+2*hs; i++) {
+  for (int k = 0; k < nz+2*hs; ++k) {
+    for (int i = 0; i < nx+2*hs; ++i) {
       //Initialize the state to zero
-      for (ll=0; ll<NUM_VARS; ll++) {
-        inds = ll*(nz+2*hs)*(nx+2*hs) + k*(nx+2*hs) + i;
-        state[inds] = 0.;
+      for (int ll = 0; ll < NUM_VARS; ++ll) {
+        state(ll, k, i) = 0.0;
       }
       //Use Gauss-Legendre quadrature to initialize a hydrostatic balance + temperature perturbation
-      for (kk=0; kk<nqpoints; kk++) {
-        for (ii=0; ii<nqpoints; ii++) {
+      for (int kk = 0; kk < nqpoints; ++kk) {
+        for (int ii = 0; ii < nqpoints; ++ii) {
           //Compute the x,z location within the global domain based on cell and quadrature index
           x = (i_beg + i-hs+0.5)*dx + (qpoints[ii]-0.5)*dx;
           z = (k_beg + k-hs+0.5)*dz + (qpoints[kk]-0.5)*dz;
@@ -582,27 +583,22 @@ void init( int *argc , char ***argv ) {
           if (data_spec_int == DATA_SPEC_INJECTION      ) { injection      (x,z,r,u,w,t,hr,ht); }
 
           //Store into the fluid state array
-          inds = ID_DENS*(nz+2*hs)*(nx+2*hs) + k*(nx+2*hs) + i;
-          state[inds] = state[inds] + r                         * qweights[ii]*qweights[kk];
-          inds = ID_UMOM*(nz+2*hs)*(nx+2*hs) + k*(nx+2*hs) + i;
-          state[inds] = state[inds] + (r+hr)*u                  * qweights[ii]*qweights[kk];
-          inds = ID_WMOM*(nz+2*hs)*(nx+2*hs) + k*(nx+2*hs) + i;
-          state[inds] = state[inds] + (r+hr)*w                  * qweights[ii]*qweights[kk];
-          inds = ID_RHOT*(nz+2*hs)*(nx+2*hs) + k*(nx+2*hs) + i;
-          state[inds] = state[inds] + ( (r+hr)*(t+ht) - hr*ht ) * qweights[ii]*qweights[kk];
+          state(ID_DENS, k, i) = state(ID_DENS, k, i) + r                         * qweights[ii]*qweights[kk];
+          state(ID_UMOM, k, i) = state(ID_UMOM, k, i) + (r+hr)*u                  * qweights[ii]*qweights[kk];
+          state(ID_WMOM, k, i) = state(ID_WMOM, k, i) + (r+hr)*w                  * qweights[ii]*qweights[kk];
+          state(ID_RHOT, k, i) = state(ID_RHOT, k, i) + ( (r+hr)*(t+ht) - hr*ht ) * qweights[ii]*qweights[kk];
         }
       }
-      for (ll=0; ll<NUM_VARS; ll++) {
-        inds = ll*(nz+2*hs)*(nx+2*hs) + k*(nx+2*hs) + i;
-        state_tmp[inds] = state[inds];
+      for (int ll = 0; ll < NUM_VARS; ++ll) {
+        state_tmp(ll, k, i) = state(ll, k, i);
       }
     }
   }
   //Compute the hydrostatic background state over vertical cell averages
-  for (k=0; k<nz+2*hs; k++) {
+  for (int k = 0; k < nz+2*hs; ++k) {
     hy_dens_cell      [k] = 0.;
     hy_dens_theta_cell[k] = 0.;
-    for (kk=0; kk<nqpoints; kk++) {
+    for (int kk = 0; kk < nqpoints; ++kk) {
       z = (k_beg + k-hs+0.5)*dz;
       //Set the fluid state based on the user's specification
       if (data_spec_int == DATA_SPEC_COLLISION      ) { collision      (0.,z,r,u,w,t,hr,ht); }
@@ -615,7 +611,7 @@ void init( int *argc , char ***argv ) {
     }
   }
   //Compute the hydrostatic background state at vertical cell interfaces
-  for (k=0; k<nz+1; k++) {
+  for (int k = 0; k < nz+1; ++k) {
     z = (k_beg + k)*dz;
     if (data_spec_int == DATA_SPEC_COLLISION      ) { collision      (0.,z,r,u,w,t,hr,ht); }
     if (data_spec_int == DATA_SPEC_THERMAL        ) { thermal        (0.,z,r,u,w,t,hr,ht); }
@@ -881,16 +877,12 @@ reduction_result reductions() {
 
   for (int k=0; k<nz; k++) {
     for (int i=0; i<nx; i++) {
-      int ind_r = ID_DENS*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
-      int ind_u = ID_UMOM*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
-      int ind_w = ID_WMOM*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
-      int ind_t = ID_RHOT*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
-      double r  =   state[ind_r] + hy_dens_cell[hs+k];             // Density
-      double u  =   state[ind_u] / r;                              // U-wind
-      double w  =   state[ind_w] / r;                              // W-wind
-      double th = ( state[ind_t] + hy_dens_theta_cell[hs+k] ) / r; // Potential Temperature (theta)
-      double p  = C0*pow(r*th,gamm);                               // Pressure
-      double t  = th / pow(p0/p,rd/cp);                            // Temperature
+      double r  =   state(ID_DENS, k+hs, i+hs) + hy_dens_cell[hs+k];             // Density
+      double u  =   state(ID_UMOM, k+hs, i+hs) / r;                              // U-wind
+      double w  =   state(ID_WMOM, k+hs, i+hs) / r;                              // W-wind
+      double th = ( state(ID_RHOT, k+hs, i+hs) + hy_dens_theta_cell[hs+k] ) / r; // Potential Temperature (theta)
+      double p  = C0 * pow(r * th, gamm);                          // Pressure
+      double t  = th / pow(p0 / p, rd / cp);                       // Temperature
       double ke = r*(u*u+w*w);                                     // Kinetic Energy
       double ie = r*cv*t;                                          // Internal Energy
       result.mass += r        *dx*dz; // Accumulate domain mass
