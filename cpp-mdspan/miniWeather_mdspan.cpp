@@ -304,7 +304,9 @@ void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-void compute_tendencies_x(view_3d state, double* flux, double* tend, double dt) {
+void compute_tendencies_x(view_3d state, double* flux_ptr, double* tend_ptr, double dt) {
+  auto flux = view_3d(flux_ptr, NUM_VARS, nz+1, nx+1);
+  auto tend = view_3d(tend_ptr, NUM_VARS, nz, nx);
 
   double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS], hv_coef;
   //Compute the hyperviscosity coefficient
@@ -334,10 +336,10 @@ void compute_tendencies_x(view_3d state, double* flux, double* tend, double dt) 
       double p = C0 * pow(r*t, gamm);
 
       //Compute the flux vector
-      flux[ID_DENS*(nz+1)*(nx+1) + k*(nx+1) + i] = r*u     - hv_coef*d3_vals[ID_DENS];
-      flux[ID_UMOM*(nz+1)*(nx+1) + k*(nx+1) + i] = r*u*u+p - hv_coef*d3_vals[ID_UMOM];
-      flux[ID_WMOM*(nz+1)*(nx+1) + k*(nx+1) + i] = r*u*w   - hv_coef*d3_vals[ID_WMOM];
-      flux[ID_RHOT*(nz+1)*(nx+1) + k*(nx+1) + i] = r*u*t   - hv_coef*d3_vals[ID_RHOT];
+      flux(ID_DENS, k, i) = r*u     - hv_coef*d3_vals[ID_DENS];
+      flux(ID_UMOM, k, i) = r*u*u+p - hv_coef*d3_vals[ID_UMOM];
+      flux(ID_WMOM, k, i) = r*u*w   - hv_coef*d3_vals[ID_WMOM];
+      flux(ID_RHOT, k, i) = r*u*t   - hv_coef*d3_vals[ID_RHOT];
     }
   }
 
@@ -348,10 +350,7 @@ void compute_tendencies_x(view_3d state, double* flux, double* tend, double dt) 
   for (int ll = 0; ll < NUM_VARS; ++ll) {
     for (int k = 0; k < nz; ++k) {
       for (int i = 0; i < nx; ++i) {
-        int indt  = ll* nz   * nx    + k* nx    + i  ;
-        int indf1 = ll*(nz+1)*(nx+1) + k*(nx+1) + i  ;
-        int indf2 = ll*(nz+1)*(nx+1) + k*(nx+1) + i+1;
-        tend[indt] = -( flux[indf2] - flux[indf1] ) / dx;
+        tend(ll, k, i) = -( flux(ll, k, i+1) - flux(ll, k, i) ) / dx;
       }
     }
   }
@@ -362,9 +361,10 @@ void compute_tendencies_x(view_3d state, double* flux, double* tend, double dt) 
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-void compute_tendencies_z(view_3d state, double* flux, double* tend, double dt) {
+void compute_tendencies_z(view_3d state, double* flux_ptr, double* tend_ptr, double dt) {
+  auto flux = view_3d(flux_ptr, NUM_VARS, nz+1, nx+1);
+  auto tend = view_3d(tend_ptr, NUM_VARS, nz, nx);
 
-  int    indf1, indf2, indt;
   double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS], hv_coef;
   //Compute the hyperviscosity coefficient
   hv_coef = -hv_beta * dz / (16*dt);
@@ -398,10 +398,10 @@ void compute_tendencies_z(view_3d state, double* flux, double* tend, double dt) 
       }
 
       //Compute the flux vector with hyperviscosity
-      flux[ID_DENS*(nz+1)*(nx+1) + k*(nx+1) + i] = r*w     - hv_coef*d3_vals[ID_DENS];
-      flux[ID_UMOM*(nz+1)*(nx+1) + k*(nx+1) + i] = r*w*u   - hv_coef*d3_vals[ID_UMOM];
-      flux[ID_WMOM*(nz+1)*(nx+1) + k*(nx+1) + i] = r*w*w+p - hv_coef*d3_vals[ID_WMOM];
-      flux[ID_RHOT*(nz+1)*(nx+1) + k*(nx+1) + i] = r*w*t   - hv_coef*d3_vals[ID_RHOT];
+      flux(ID_DENS, k, i) = r*w     - hv_coef*d3_vals[ID_DENS];
+      flux(ID_UMOM, k, i) = r*w*u   - hv_coef*d3_vals[ID_UMOM];
+      flux(ID_WMOM, k, i) = r*w*w+p - hv_coef*d3_vals[ID_WMOM];
+      flux(ID_RHOT, k, i) = r*w*t   - hv_coef*d3_vals[ID_RHOT];
     }
   }
 
@@ -412,12 +412,9 @@ void compute_tendencies_z(view_3d state, double* flux, double* tend, double dt) 
   for (int ll = 0; ll < NUM_VARS; ++ll) {
     for (int k = 0; k < nz; ++k) {
       for (int i = 0; i < nx; ++i) {
-        indt  = ll* nz   * nx    + k* nx    + i  ;
-        indf1 = ll*(nz+1)*(nx+1) + (k  )*(nx+1) + i;
-        indf2 = ll*(nz+1)*(nx+1) + (k+1)*(nx+1) + i;
-        tend[indt] = -( flux[indf2] - flux[indf1] ) / dz;
+        tend(ll, k, i) = -( flux(ll, k+1, i) - flux(ll, k, i) ) / dz;
         if (ll == ID_WMOM) {
-          tend[indt] = tend[indt] - state(ID_DENS, k+hs, i+hs)*grav;
+          tend(ll, k, i) = tend(ll, k, i) - state(ID_DENS, k+hs, i+hs)*grav;
         }
       }
     }
