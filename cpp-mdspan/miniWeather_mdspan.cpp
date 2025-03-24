@@ -470,27 +470,29 @@ void set_halo_values_x( double* state_ptr ) {
 
 //Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
 //decomposition in the vertical direction
-void set_halo_values_z( double *state ) {
+void set_halo_values_z(double* state_ptr) {
+  auto state = view_3d(state_ptr, NUM_VARS, (nz+2*hs), (nx+2*hs));
+
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
-  for (int ll=0; ll<NUM_VARS; ll++) {
-    for (int i=0; i<nx+2*hs; i++) {
+  for (int ll = 0; ll < NUM_VARS; ++ll) {
+    for (int i = 0; i < nx+2*hs; ++i) {
       if (ll == ID_WMOM) {
-        state[ll*(nz+2*hs)*(nx+2*hs) + (0      )*(nx+2*hs) + i] = 0.;
-        state[ll*(nz+2*hs)*(nx+2*hs) + (1      )*(nx+2*hs) + i] = 0.;
-        state[ll*(nz+2*hs)*(nx+2*hs) + (nz+hs  )*(nx+2*hs) + i] = 0.;
-        state[ll*(nz+2*hs)*(nx+2*hs) + (nz+hs+1)*(nx+2*hs) + i] = 0.;
+        state(ll, 0, i) = 0.;
+        state(ll, 1, i) = 0.;
+        state(ll, nz+hs, i) = 0.;
+        state(ll, nz+hs+1, i) = 0.;
       } else if (ll == ID_UMOM) {
-        state[ll*(nz+2*hs)*(nx+2*hs) + (0      )*(nx+2*hs) + i] = state[ll*(nz+2*hs)*(nx+2*hs) + (hs     )*(nx+2*hs) + i] / hy_dens_cell[hs     ] * hy_dens_cell[0      ];
-        state[ll*(nz+2*hs)*(nx+2*hs) + (1      )*(nx+2*hs) + i] = state[ll*(nz+2*hs)*(nx+2*hs) + (hs     )*(nx+2*hs) + i] / hy_dens_cell[hs     ] * hy_dens_cell[1      ];
-        state[ll*(nz+2*hs)*(nx+2*hs) + (nz+hs  )*(nx+2*hs) + i] = state[ll*(nz+2*hs)*(nx+2*hs) + (nz+hs-1)*(nx+2*hs) + i] / hy_dens_cell[nz+hs-1] * hy_dens_cell[nz+hs  ];
-        state[ll*(nz+2*hs)*(nx+2*hs) + (nz+hs+1)*(nx+2*hs) + i] = state[ll*(nz+2*hs)*(nx+2*hs) + (nz+hs-1)*(nx+2*hs) + i] / hy_dens_cell[nz+hs-1] * hy_dens_cell[nz+hs+1];
+        state(ll, 0, i) = state(ll, hs, i) / hy_dens_cell[hs] * hy_dens_cell[0];
+        state(ll, 1, i) = state(ll, hs, i) / hy_dens_cell[hs] * hy_dens_cell[1];
+        state(ll, nz+hs, i) = state(ll, nz+hs-1, i) / hy_dens_cell[nz+hs-1] * hy_dens_cell[nz+hs];
+        state(ll, nz+hs+1, i) = state(ll, nz+hs-1, i) / hy_dens_cell[nz+hs-1] * hy_dens_cell[nz+hs+1];
       } else {
-        state[ll*(nz+2*hs)*(nx+2*hs) + (0      )*(nx+2*hs) + i] = state[ll*(nz+2*hs)*(nx+2*hs) + (hs     )*(nx+2*hs) + i];
-        state[ll*(nz+2*hs)*(nx+2*hs) + (1      )*(nx+2*hs) + i] = state[ll*(nz+2*hs)*(nx+2*hs) + (hs     )*(nx+2*hs) + i];
-        state[ll*(nz+2*hs)*(nx+2*hs) + (nz+hs  )*(nx+2*hs) + i] = state[ll*(nz+2*hs)*(nx+2*hs) + (nz+hs-1)*(nx+2*hs) + i];
-        state[ll*(nz+2*hs)*(nx+2*hs) + (nz+hs+1)*(nx+2*hs) + i] = state[ll*(nz+2*hs)*(nx+2*hs) + (nz+hs-1)*(nx+2*hs) + i];
+        state(ll, 0, i) = state(ll, hs, i);
+        state(ll, 1, i) = state(ll, hs, i);
+        state(ll, nz+hs, i) = state(ll, nz+hs-1, i);
+        state(ll, nz+hs+1, i) = state(ll, nz+hs-1, i);
       }
     }
   }
