@@ -127,14 +127,14 @@ void   collision            ( double x , double z , double &r , double &u , doub
 void   hydro_const_theta    ( double z                   , double &r , double &t );
 void   hydro_const_bvfreq   ( double z , double bv_freq0 , double &r , double &t );
 double sample_ellipse_cosine( double x , double z , double amp , double x0 , double z0 , double xrad , double zrad );
-void   output               ( double *state , double etime );
-void   ncwrap               ( int ierr , int line );
-void   perform_timestep     ( double *state , double *state_tmp , double *flux , double *tend , double dt );
-void   semi_discrete_step   ( double *state_init , double *state_forcing , double *state_out , double dt , int dir , double *flux , double *tend );
-void   compute_tendencies_x ( double *state , double *flux , double *tend , double dt);
-void   compute_tendencies_z ( double *state , double *flux , double *tend , double dt);
-void   set_halo_values_x    ( double *state );
-void   set_halo_values_z    ( double *state );
+void   output               (view_3d state, double etime);
+void   ncwrap               (int ierr, int line);
+void   perform_timestep     (view_3d state, view_3d state_tmp, double* flux, double* tend, double dt);
+void   semi_discrete_step   (view_3d state_init, view_3d state_forcing, view_3d state_out, double dt, int dir, double* flux, double* tend);
+void   compute_tendencies_x (view_3d state, double* flux, double* tend, double dt);
+void   compute_tendencies_z (view_3d state, double* flux, double* tend, double dt);
+void   set_halo_values_x    (view_3d state);
+void   set_halo_values_z    (view_3d state);
 
 struct reduction_result {
   double mass;
@@ -159,9 +159,11 @@ int main(int argc, char **argv) {
     fprintf(stderr, "mass0: %le\n" , mass0);
     fprintf(stderr, "te0:   %le\n" , te0  );
   }
+  auto state_view = view_3d(state.get(), NUM_VARS, (nz+2*hs), (nx+2*hs));
+  auto state_tmp_view = view_3d(state_tmp.get(), NUM_VARS, (nz+2*hs), (nx+2*hs));
 
   //Output the initial state
-  output(state.get(), etime);
+  output(state_view, etime);
 
   ////////////////////////////////////////////////////
   // MAIN TIME STEP LOOP
@@ -171,7 +173,7 @@ int main(int argc, char **argv) {
     //If the time step leads to exceeding the simulation time, shorten it for the last step
     if (etime + dt > sim_time) { dt = sim_time - etime; }
     //Perform a single time step
-    perform_timestep(state.get(), state_tmp.get(), flux.get(), tend.get(), dt);
+    perform_timestep(state_view, state_tmp_view, flux.get(), tend.get(), dt);
     //Inform the user
 #ifndef NO_INFORM
     if (mainproc) { fprintf(stderr, "Elapsed Time: %lf / %lf\n", etime , sim_time ); }
@@ -182,7 +184,7 @@ int main(int argc, char **argv) {
     //If it's time for output, reset the counter, and do output
     if (output_counter >= output_freq) {
       output_counter = output_counter - output_freq;
-      output(state.get(), etime);
+      output(state_view, etime);
     }
 #if 0
     {
@@ -216,26 +218,25 @@ int main(int argc, char **argv) {
 // q*     = q[n] + dt/3 * rhs(q[n])
 // q**    = q[n] + dt/2 * rhs(q*  )
 // q[n+1] = q[n] + dt/1 * rhs(q** )
-void perform_timestep( double *state , double *state_tmp , double *flux , double *tend , double dt ) {
-  //fprintf(stderr, "direction_switch: %d\n", direction_switch);
+void perform_timestep(view_3d state, view_3d state_tmp, double* flux, double* tend, double dt) {
   if (direction_switch) {
     //x-direction first
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_X , flux , tend );
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , DIR_X , flux , tend );
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , DIR_X , flux , tend );
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, flux, tend);
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, flux, tend);
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_X, flux, tend);
     //z-direction second
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_Z , flux , tend );
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , DIR_Z , flux , tend );
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , DIR_Z , flux , tend );
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_Z, flux, tend);
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_Z, flux, tend);
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_Z, flux, tend);
   } else {
     //z-direction second
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_Z , flux , tend );
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , DIR_Z , flux , tend );
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , DIR_Z , flux , tend );
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_Z, flux, tend);
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_Z, flux, tend);
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_Z, flux, tend);
     //x-direction first
-    semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_X , flux , tend );
-    semi_discrete_step( state , state_tmp , state_tmp , dt / 2 , DIR_X , flux , tend );
-    semi_discrete_step( state , state_tmp , state     , dt / 1 , DIR_X , flux , tend );
+    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, flux, tend);
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, flux, tend);
+    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_X, flux, tend);
   }
   if (direction_switch) { direction_switch = 0; } else { direction_switch = 1; }
 }
@@ -244,10 +245,9 @@ void perform_timestep( double *state , double *state_tmp , double *flux , double
 //Perform a single semi-discretized step in time with the form:
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
-void semi_discrete_step( double *state_init , double *state_forcing , double *state_out , double dt , int dir , double *flux , double *tend ) {
-  int inds, indt, indw;
-  double x, z, wpert, dist, x0, z0, xrad, zrad, amp;
-  if        (dir == DIR_X) {
+void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state_out, double dt, int dir, double* flux, double* tend) {
+  int indt, indw;
+  if (dir == DIR_X) {
     //Set the halo values for this MPI task's fluid state in the x-direction
     set_halo_values_x(state_forcing);
     //Compute the time tendencies for the fluid state in the x-direction
@@ -267,19 +267,21 @@ void semi_discrete_step( double *state_init , double *state_forcing , double *st
     for (int k = 0; k < nz; ++k) {
       for (int i = 0; i < nx; ++i) {
         if (data_spec_int == DATA_SPEC_GRAVITY_WAVES) {
-          x = (i_beg + i+0.5)*dx;
-          z = (k_beg + k+0.5)*dz;
+          double x = (i_beg + i+0.5)*dx;
+          double z = (k_beg + k+0.5)*dz;
           // Using sample_ellipse_cosine requires "acc routine" in OpenACC and "declare target" in OpenMP offload
           // Neither of these are particularly well supported. So I'm manually inlining here
           // wpert = sample_ellipse_cosine( x,z , 0.01 , xlen/8,1000., 500.,500. );
+          
+          double wpert = 0.0;
           {
-            x0   = xlen/8;
-            z0   = 1000;
-            xrad = 500;
-            zrad = 500;
-            amp  = 0.01;
+            double x0   = xlen/8;
+            double z0   = 1000;
+            double xrad = 500;
+            double zrad = 500;
+            double amp  = 0.01;
             //Compute distance from bubble center
-            dist = sqrt( ((x-x0)/xrad)*((x-x0)/xrad) + ((z-z0)/zrad)*((z-z0)/zrad) ) * pi / 2.;
+            double dist = sqrt( ((x-x0)/xrad)*((x-x0)/xrad) + ((z-z0)/zrad)*((z-z0)/zrad) ) * pi / 2.;
             //If the distance from bubble center is less than the radius, create a cos**2 profile
             if (dist <= pi / 2.) {
               wpert = amp * pow(cos(dist),2.);
@@ -290,9 +292,8 @@ void semi_discrete_step( double *state_init , double *state_forcing , double *st
           indw = ID_WMOM*nz*nx + k*nx + i;
           tend[indw] += wpert*hy_dens_cell[hs+k];
         }
-        inds = ll*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
         indt = ll*nz*nx + k*nx + i;
-        state_out[inds] = state_init[inds] + dt * tend[indt];
+        state_out(ll, k+hs, i+hs) = state_init(ll, k+hs, i+hs) + dt * tend[indt];
       }
     }
   }
@@ -303,8 +304,7 @@ void semi_discrete_step( double *state_init , double *state_forcing , double *st
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-void compute_tendencies_x(double* state_ptr, double* flux, double* tend, double dt) {
-  auto state = view_3d(state_ptr, NUM_VARS, (nz+2*hs), (nx+2*hs));
+void compute_tendencies_x(view_3d state, double* flux, double* tend, double dt) {
 
   double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS], hv_coef;
   //Compute the hyperviscosity coefficient
@@ -362,22 +362,22 @@ void compute_tendencies_x(double* state_ptr, double* flux, double* tend, double 
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-void compute_tendencies_z( double *state , double *flux , double *tend , double dt) {
-  int    i,k,ll,s, inds, indf1, indf2, indt;
-  double r,u,w,t,p, stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS], hv_coef;
+void compute_tendencies_z(view_3d state, double* flux, double* tend, double dt) {
+
+  int    indf1, indf2, indt;
+  double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS], hv_coef;
   //Compute the hyperviscosity coefficient
   hv_coef = -hv_beta * dz / (16*dt);
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Compute fluxes in the x-direction for each cell
-  for (k=0; k<nz+1; k++) {
-    for (i=0; i<nx; i++) {
+  for (int k = 0; k < nz+1; ++k) {
+    for (int i = 0; i < nx; ++i) {
       //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
-      for (ll=0; ll<NUM_VARS; ll++) {
-        for (s=0; s<sten_size; s++) {
-          inds = ll*(nz+2*hs)*(nx+2*hs) + (k+s)*(nx+2*hs) + i+hs;
-          stencil[s] = state[inds];
+      for (int ll = 0; ll < NUM_VARS; ++ll) {
+        for (int s = 0; s < sten_size; ++s) {
+          stencil[s] = state(ll, k+s, i+hs);
         }
         //Fourth-order-accurate interpolation of the state
         vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
@@ -386,11 +386,11 @@ void compute_tendencies_z( double *state , double *flux , double *tend , double 
       }
 
       //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-      r = vals[ID_DENS] + hy_dens_int[k];
-      u = vals[ID_UMOM] / r;
-      w = vals[ID_WMOM] / r;
-      t = ( vals[ID_RHOT] + hy_dens_theta_int[k] ) / r;
-      p = C0*pow((r*t),gamm) - hy_pressure_int[k];
+      double r = vals[ID_DENS] + hy_dens_int[k];
+      double u = vals[ID_UMOM] / r;
+      double w = vals[ID_WMOM] / r;
+      double t = (vals[ID_RHOT] + hy_dens_theta_int[k]) / r;
+      double p = C0 * pow(r * t, gamm) - hy_pressure_int[k];
       //Enforce vertical boundary condition and exact mass conservation
       if (k == 0 || k == nz) {
         w                = 0;
@@ -409,16 +409,15 @@ void compute_tendencies_z( double *state , double *flux , double *tend , double 
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Use the fluxes to compute tendencies for each cell
-  for (ll=0; ll<NUM_VARS; ll++) {
-    for (k=0; k<nz; k++) {
-      for (i=0; i<nx; i++) {
+  for (int ll = 0; ll < NUM_VARS; ++ll) {
+    for (int k = 0; k < nz; ++k) {
+      for (int i = 0; i < nx; ++i) {
         indt  = ll* nz   * nx    + k* nx    + i  ;
         indf1 = ll*(nz+1)*(nx+1) + (k  )*(nx+1) + i;
         indf2 = ll*(nz+1)*(nx+1) + (k+1)*(nx+1) + i;
         tend[indt] = -( flux[indf2] - flux[indf1] ) / dz;
         if (ll == ID_WMOM) {
-          inds = ID_DENS*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
-          tend[indt] = tend[indt] - state[inds]*grav;
+          tend[indt] = tend[indt] - state(ID_DENS, k+hs, i+hs)*grav;
         }
       }
     }
@@ -428,9 +427,7 @@ void compute_tendencies_z( double *state , double *flux , double *tend , double 
 
 
 //Set this MPI task's halo values in the x-direction. This routine will require MPI
-void set_halo_values_x( double* state_ptr ) {
-  auto state = view_3d(state_ptr, NUM_VARS, (nz+2*hs), (nx+2*hs));
-
+void set_halo_values_x(view_3d state) {
   ////////////////////////////////////////////////////////////////////////
   // TODO: EXCHANGE HALO VALUES WITH NEIGHBORING MPI TASKS
   // (1) give    state(1:hs,1:nz,1:NUM_VARS)       to   my left  neighbor
@@ -470,8 +467,7 @@ void set_halo_values_x( double* state_ptr ) {
 
 //Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
 //decomposition in the vertical direction
-void set_halo_values_z(double* state_ptr) {
-  auto state = view_3d(state_ptr, NUM_VARS, (nz+2*hs), (nx+2*hs));
+void set_halo_values_z(view_3d state) {
 
   /////////////////////////////////////////////////
   // TODO: THREAD ME
@@ -752,8 +748,7 @@ double sample_ellipse_cosine( double x , double z , double amp , double x0 , dou
 //Output the fluid state (state) to a NetCDF file at a given elapsed model time (etime)
 //The file I/O uses parallel-netcdf, the only external library required for this mini-app.
 //If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
-void output(double* state_ptr, double etime) {
-  auto state = view_3d(state_ptr, NUM_VARS, (nz+2*hs), (nx+2*hs));
+void output(view_3d state, double etime) {
 
   int ncid, t_dimid, x_dimid, z_dimid, theta_varid, t_varid, dimids[3];
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
