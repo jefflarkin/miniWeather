@@ -114,7 +114,7 @@ namespace md {
   using MDSPAN_IMPL_STANDARD_NAMESPACE :: MDSPAN_IMPL_PROPOSED_NAMESPACE :: dims;
 } // namespace md
 
-using view_3d = md::mdspan<double, md::dims<3>, md::layout_left>;
+using view_3d = md::mdspan<double, md::dims<3>, md::layout_right>;
 
 //Declaring the functions defined after "main"
 void   init                 ( int *argc , char ***argv );
@@ -765,13 +765,18 @@ void output(double* state_ptr, double etime) {
   //Inform the user
   if (mainproc) { fprintf(stderr, "*** OUTPUT ***\n"); }
 
-  //Temporary arrays to hold density, u-wind, w-wind, and potential temperature (theta)
+  //Temporary arrays to hold density, u-wind, w-wind, and potential temperature (theta).
+  //
+  // As with state, we retain the reversed order of extents.
+  // Some compilers aren't so good at CTAD for mapping.
+  auto mapping_2d = md::layout_right::template mapping<md::dims<2>>{md::dims<2>{nz, nx}};
+
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
-  auto dens     = std::make_unique<double[]>(nx*nz);
-  auto uwnd     = std::make_unique<double[]>(nx*nz);
-  auto wwnd     = std::make_unique<double[]>(nx*nz);
+  auto dens     = md::make_unique_mdarray<double>(mapping_2d);
+  auto uwnd     = md::make_unique_mdarray<double>(mapping_2d);
+  auto wwnd     = md::make_unique_mdarray<double>(mapping_2d);
 #endif
-  auto theta    = std::make_unique<double[]>(nx*nz);
+  auto theta    = md::make_unique_mdarray<double>(mapping_2d);
   auto etimearr = std::make_unique<double[]>(1);
 
   // PNetCDF needs an MPI_Info object that is not MPI_INFO_NULL.
@@ -820,11 +825,11 @@ void output(double* state_ptr, double etime) {
   for (int k = 0; k < nz; ++k) {
     for (int i = 0; i < nx; ++i) {
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
-      dens [k*nx+i] = state(ID_DENS, k+hs, i+hs);
-      uwnd [k*nx+i] = state(ID_UMOM, k+hs, i+hs) / ( hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs) );
-      wwnd [k*nx+i] = state(ID_WMOM, k+hs, i+hs) / ( hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs) );
+      dens(k, i) = state(ID_DENS, k+hs, i+hs);
+      uwnd(k, i) = state(ID_UMOM, k+hs, i+hs) / ( hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs) );
+      wwnd(k, i) = state(ID_WMOM, k+hs, i+hs) / ( hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs) );
 #endif      
-      theta[k*nx+i] = ( state(ID_RHOT, k+hs, i+hs) + hy_dens_theta_cell[k+hs] ) / ( hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs) ) - hy_dens_theta_cell[k+hs] / hy_dens_cell[k+hs];
+      theta(k, i) = ( state(ID_RHOT, k+hs, i+hs) + hy_dens_theta_cell[k+hs] ) / ( hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs) ) - hy_dens_theta_cell[k+hs] / hy_dens_cell[k+hs];
     }
   }
 
@@ -832,9 +837,9 @@ void output(double* state_ptr, double etime) {
   st3[0] = num_out; st3[1] = k_beg; st3[2] = i_beg;
   ct3[0] = 1      ; ct3[1] = nz   ; ct3[2] = nx   ;
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)      
-  ncwrap( ncmpi_put_vara_double_all( ncid ,  dens_varid , st3 , ct3 , dens  ) , __LINE__ );
-  ncwrap( ncmpi_put_vara_double_all( ncid ,  uwnd_varid , st3 , ct3 , uwnd  ) , __LINE__ );
-  ncwrap( ncmpi_put_vara_double_all( ncid ,  wwnd_varid , st3 , ct3 , wwnd  ) , __LINE__ );
+  ncwrap( ncmpi_put_vara_double_all( ncid ,  dens_varid , st3 , ct3 , dens.get()  ) , __LINE__ );
+  ncwrap( ncmpi_put_vara_double_all( ncid ,  uwnd_varid , st3 , ct3 , uwnd.get()  ) , __LINE__ );
+  ncwrap( ncmpi_put_vara_double_all( ncid ,  wwnd_varid , st3 , ct3 , wwnd.get()  ) , __LINE__ );
 #endif
   ncwrap( ncmpi_put_vara_double_all( ncid , theta_varid , st3 , ct3 , theta.get() ) , __LINE__ );
 
