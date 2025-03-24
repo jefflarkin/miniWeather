@@ -94,13 +94,27 @@ std::unique_ptr<double[]> hy_pressure_int;      //hydrostatic press (vert cell i
 double etime;                 //Elapsed model time
 double output_counter;        //Helps determine when it's time to do output
 //Runtime variable arrays
-std::unique_ptr<double[]> state;                //Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
-std::unique_ptr<double[]> state_tmp;            //Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
-std::unique_ptr<double[]> flux;                 //Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
-std::unique_ptr<double[]> tend;                 //Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
+//
+// C indexing seems to prefer the extents in reverse order.
+// Respecting that also avoids divergence from the Python version.
+// This means that the mdspan must be layout_right; the intent appears
+// to be for C code to use row-major storage, but with Fortran ordering.
+//
+// state extents: NUM_VARS, (nz+2*hs), (nx+2*hs)
+//
+std::unique_ptr<double[]> state;     //Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
+std::unique_ptr<double[]> state_tmp; //Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
+std::unique_ptr<double[]> flux;      //Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
+std::unique_ptr<double[]> tend;      //Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
 int    num_out = 0;           //The number of outputs performed so far
 int    direction_switch = 1;
 
+namespace md {
+  using MDSPAN_IMPL_STANDARD_NAMESPACE :: layout_left;
+  using MDSPAN_IMPL_STANDARD_NAMESPACE :: MDSPAN_IMPL_PROPOSED_NAMESPACE :: dims;
+} // namespace md
+
+using view_3d = md::mdspan<double, md::dims<3>, md::layout_left>;
 
 //Declaring the functions defined after "main"
 void   init                 ( int *argc , char ***argv );
@@ -739,11 +753,12 @@ double sample_ellipse_cosine( double x , double z , double amp , double x0 , dou
 //Output the fluid state (state) to a NetCDF file at a given elapsed model time (etime)
 //The file I/O uses parallel-netcdf, the only external library required for this mini-app.
 //If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
-void output( double *state , double etime ) {
+void output(double* state_ptr, double etime) {
+  auto state = view_3d(state_ptr, NUM_VARS, (nz+2*hs), (nx+2*hs));
+
   int ncid, t_dimid, x_dimid, z_dimid, theta_varid, t_varid, dimids[3];
-  int i, k, ind_r, ind_t;
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
-  int ind_u, ind_w, dens_varid, uwnd_varid, wwnd_varid;
+  int dens_varid, uwnd_varid, wwnd_varid;
 #endif
   MPI_Offset st1[1], ct1[1], st3[3], ct3[3];
 
@@ -802,20 +817,14 @@ void output( double *state , double etime ) {
   }
 
   //Store perturbed values in the temp arrays for output
-  for (k=0; k<nz; k++) {
-    for (i=0; i<nx; i++) {
-      ind_r = ID_DENS*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
-#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)      
-      ind_u = ID_UMOM*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
-      ind_w = ID_WMOM*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
-#endif
-      ind_t = ID_RHOT*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
+  for (int k = 0; k < nz; ++k) {
+    for (int i = 0; i < nx; ++i) {
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
-      dens [k*nx+i] = state[ind_r];
-      uwnd [k*nx+i] = state[ind_u] / ( hy_dens_cell[k+hs] + state[ind_r] );
-      wwnd [k*nx+i] = state[ind_w] / ( hy_dens_cell[k+hs] + state[ind_r] );
+      dens [k*nx+i] = state(ID_DENS, k+hs, i+hs);
+      uwnd [k*nx+i] = state(ID_UMOM, k+hs, i+hs) / ( hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs) );
+      wwnd [k*nx+i] = state(ID_WMOM, k+hs, i+hs) / ( hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs) );
 #endif      
-      theta[k*nx+i] = ( state[ind_t] + hy_dens_theta_cell[k+hs] ) / ( hy_dens_cell[k+hs] + state[ind_r] ) - hy_dens_theta_cell[k+hs] / hy_dens_cell[k+hs];
+      theta[k*nx+i] = ( state(ID_RHOT, k+hs, i+hs) + hy_dens_theta_cell[k+hs] ) / ( hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs) ) - hy_dens_theta_cell[k+hs] / hy_dens_cell[k+hs];
     }
   }
 
