@@ -109,11 +109,11 @@ using view_3d = md::mdspan<double, md::dims<3>, md::layout_right>;
 //
 // state extents: NUM_VARS, (nz+2*hs), (nx+2*hs)
 //
-alloc_3d state;      //Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
-alloc_3d state_tmp;  //Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
-std::unique_ptr<double[]> flux;      //Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
-std::unique_ptr<double[]> tend;      //Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
-int    num_out = 0;           //The number of outputs performed so far
+alloc_3d state;     // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
+alloc_3d state_tmp; // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
+alloc_3d flux;      // Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
+alloc_3d tend;      // Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
+int    num_out = 0; // The number of outputs performed so far
 int    direction_switch = 1;
 
 //Declaring the functions defined after "main"
@@ -129,10 +129,11 @@ void   hydro_const_bvfreq   ( double z , double bv_freq0 , double &r , double &t
 double sample_ellipse_cosine( double x , double z , double amp , double x0 , double z0 , double xrad , double zrad );
 void   output               (view_3d state, double etime);
 void   ncwrap               (int ierr, int line);
-void   perform_timestep     (view_3d state, view_3d state_tmp, double* flux, double* tend, double dt);
-void   semi_discrete_step   (view_3d state_init, view_3d state_forcing, view_3d state_out, double dt, int dir, double* flux, double* tend);
-void   compute_tendencies_x (view_3d state, double* flux, double* tend, double dt);
-void   compute_tendencies_z (view_3d state, double* flux, double* tend, double dt);
+void   perform_timestep     (view_3d state, view_3d state_tmp, view_3d flux, view_3d tend, double dt);
+void   semi_discrete_step   (view_3d state_init, view_3d state_forcing, view_3d state_out,
+                             double dt, int dir, view_3d flux, view_3d tend);
+void   compute_tendencies_x (view_3d state, view_3d flux, view_3d tend, double dt);
+void   compute_tendencies_z (view_3d state, view_3d flux, view_3d tend, double dt);
 void   set_halo_values_x    (view_3d state);
 void   set_halo_values_z    (view_3d state);
 
@@ -161,6 +162,8 @@ int main(int argc, char **argv) {
   }
   auto state_view = view_3d(state.get(), NUM_VARS, nz+2*hs, nx+2*hs);
   auto state_tmp_view = view_3d(state_tmp.get(), NUM_VARS, nz+2*hs, nx+2*hs);
+  auto flux_view = view_3d(flux.get(), NUM_VARS, nz+1, nx+1);
+  auto tend_view = view_3d(tend.get(), NUM_VARS, nz, nx);
 
   //Output the initial state
   output(state_view, etime);
@@ -171,12 +174,16 @@ int main(int argc, char **argv) {
   auto t1 = std::chrono::steady_clock::now();
   while (etime < sim_time) {
     //If the time step leads to exceeding the simulation time, shorten it for the last step
-    if (etime + dt > sim_time) { dt = sim_time - etime; }
+    if (etime + dt > sim_time) {
+      dt = sim_time - etime;
+    }
     //Perform a single time step
-    perform_timestep(state_view, state_tmp_view, flux.get(), tend.get(), dt);
+    perform_timestep(state_view, state_tmp_view, flux_view, tend_view, dt);
     //Inform the user
-#ifndef NO_INFORM
-    if (mainproc) { fprintf(stderr, "Elapsed Time: %lf / %lf\n", etime , sim_time ); }
+#if ! defined(NO_INFORM)
+    if (mainproc) {
+      fprintf(stderr, "Elapsed Time: %lf / %lf\n", etime, sim_time);
+    }
 #endif
     //Update the elapsed time and output counter
     etime = etime + dt;
@@ -186,13 +193,6 @@ int main(int argc, char **argv) {
       output_counter = output_counter - output_freq;
       output(state_view, etime);
     }
-#if 0
-    {
-      auto [mass, te] = reductions();
-      fprintf(stderr, "mass: %le\n" , mass );
-      fprintf(stderr, "te:   %le\n" , te   );
-    }
-#endif // 0
   }
   auto t2 = std::chrono::steady_clock::now();
   if (mainproc) {
@@ -218,7 +218,8 @@ int main(int argc, char **argv) {
 // q*     = q[n] + dt/3 * rhs(q[n])
 // q**    = q[n] + dt/2 * rhs(q*  )
 // q[n+1] = q[n] + dt/1 * rhs(q** )
-void perform_timestep(view_3d state, view_3d state_tmp, double* flux, double* tend, double dt) {
+void perform_timestep(view_3d state, view_3d state_tmp, view_3d flux, view_3d tend, double dt)
+{
   if (direction_switch) {
     //x-direction first
     semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, flux, tend);
@@ -244,9 +245,11 @@ void perform_timestep(view_3d state, view_3d state_tmp, double* flux, double* te
 
 //Perform a single semi-discretized step in time with the form:
 //state_out = state_init + dt * rhs(state_forcing)
-//Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
-void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state_out, double dt, int dir, double* flux, double* tend) {
-  int indt, indw;
+//Meaning the step starts from state_init, computes the rhs using state_forcing,
+//and stores the result in state_out
+void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state_out,
+  double dt, int dir, view_3d flux, view_3d tend)
+{
   if (dir == DIR_X) {
     //Set the halo values for this MPI task's fluid state in the x-direction
     set_halo_values_x(state_forcing);
@@ -289,11 +292,9 @@ void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state
               wpert = 0.;
             }
           }
-          indw = ID_WMOM*nz*nx + k*nx + i;
-          tend[indw] += wpert*hy_dens_cell[hs+k];
+          tend(ID_WMOM, k, i) += wpert*hy_dens_cell[hs+k];
         }
-        indt = ll*nz*nx + k*nx + i;
-        state_out(ll, k+hs, i+hs) = state_init(ll, k+hs, i+hs) + dt * tend[indt];
+        state_out(ll, k+hs, i+hs) = state_init(ll, k+hs, i+hs) + dt * tend(ll, k, i);
       }
     }
   }
@@ -304,10 +305,7 @@ void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-void compute_tendencies_x(view_3d state, double* flux_ptr, double* tend_ptr, double dt) {
-  auto flux = view_3d(flux_ptr, NUM_VARS, nz+1, nx+1);
-  auto tend = view_3d(tend_ptr, NUM_VARS, nz, nx);
-
+void compute_tendencies_x(view_3d state, view_3d flux, view_3d tend, double dt) {
   double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS], hv_coef;
   //Compute the hyperviscosity coefficient
   hv_coef = -hv_beta * dx / (16*dt);
@@ -361,10 +359,7 @@ void compute_tendencies_x(view_3d state, double* flux_ptr, double* tend_ptr, dou
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-void compute_tendencies_z(view_3d state, double* flux_ptr, double* tend_ptr, double dt) {
-  auto flux = view_3d(flux_ptr, NUM_VARS, nz+1, nx+1);
-  auto tend = view_3d(tend_ptr, NUM_VARS, nz, nx);
-
+void compute_tendencies_z(view_3d state, view_3d flux, view_3d tend, double dt) {
   double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS], hv_coef;
   //Compute the hyperviscosity coefficient
   hv_coef = -hv_beta * dz / (16*dt);
@@ -533,19 +528,19 @@ void init( int *argc , char ***argv ) {
     state              = md::make_unique_mdarray<double>(state_mapping);
     state_tmp          = md::make_unique_mdarray<double>(state_mapping);
   }
-  flux               = std::make_unique<double[]>( (nx+1)*(nz+1)*NUM_VARS );
-  tend               = std::make_unique<double[]>( nx*nz*NUM_VARS );
-  hy_dens_cell       = std::make_unique<double[]>( (nz+2*hs) );
-  hy_dens_theta_cell = std::make_unique<double[]>( (nz+2*hs) );
-  hy_dens_int        = std::make_unique<double[]>( (nz+1) );
-  hy_dens_theta_int  = std::make_unique<double[]>( (nz+1) );
-  hy_pressure_int    = std::make_unique<double[]>( (nz+1) );
+  flux               = md::make_unique_mdarray<double>(md::dims<3>{NUM_VARS, nz+1, nx+1});
+  tend               = md::make_unique_mdarray<double>(md::dims<3>{NUM_VARS, nz, nx});
+  hy_dens_cell       = std::make_unique<double[]>(nz+2*hs);
+  hy_dens_theta_cell = std::make_unique<double[]>(nz+2*hs);
+  hy_dens_int        = std::make_unique<double[]>(nz+1);
+  hy_dens_theta_int  = std::make_unique<double[]>(nz+1);
+  hy_pressure_int    = std::make_unique<double[]>(nz+1);
 
   //Define the maximum stable time step based on an assumed maximum wind speed
   dt = fmin(dx,dz) / max_speed * cfl;
   //Set initial elapsed model time and output_counter to zero
-  etime = 0.;
-  output_counter = 0.;
+  etime = 0.0;
+  output_counter = 0.0;
 
   //If I'm the main process in MPI, display some grid information
   if (mainproc) {
