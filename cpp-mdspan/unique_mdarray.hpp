@@ -22,6 +22,7 @@ using MDSPAN_IMPL_STANDARD_NAMESPACE :: extents;
 using MDSPAN_IMPL_STANDARD_NAMESPACE :: layout_right;
 using MDSPAN_IMPL_STANDARD_NAMESPACE :: mdspan;
 using MDSPAN_IMPL_STANDARD_NAMESPACE :: default_accessor;
+using MDSPAN_IMPL_STANDARD_NAMESPACE :: MDSPAN_IMPL_PROPOSED_NAMESPACE :: dims;
 
 namespace impl {
 
@@ -525,7 +526,7 @@ private:
 };
 
 //
-// The analog of make_unique<T[]> needs a mapping instead of a size.
+// Analog of make_unique<T[]>: it takes a mapping instead of a size.
 //
 template<class ElementType, class Mapping>
 constexpr unique_mdarray<ElementType, typename Mapping::extents_type, typename Mapping::layout_type>
@@ -534,6 +535,31 @@ constexpr unique_mdarray<ElementType, typename Mapping::extents_type, typename M
   const auto num_elts = mapping.required_span_size();
   auto ptr = std::make_unique<ElementType[]>(num_elts);
   return {std::span<ElementType>{ptr.release(), num_elts}, mapping};
+}
+
+//
+// Another analog of make_unique<T[]>: it takes an extents object instead of a size.
+//
+template<class ElementType, class IndexType, size_t... Exts>
+constexpr unique_mdarray<ElementType, extents<IndexType, Exts...>>
+  make_unique_mdarray(const extents<IndexType, Exts...>& exts)
+{
+  return make_unique_mdarray<ElementType>(layout_right::template mapping<extents_type>{exts});
+}
+
+//
+// Another make_unique<T[]>(size_t) analog; it takes a list of extents
+// (as things convertible to index_type, generally integers).
+//
+template<class ElementType, size_t InputExtent, class... OtherIndexTypes>
+requires(
+  (std::is_convertible_v<OtherIndexTypes, size_t> && ...) &&
+  (std::is_nothrow_constructible_v<size_t, OtherIndexTypes> && ...)
+)
+constexpr unique_mdarray<ElementType, dims<sizeof...(OtherIndexTypes)>>
+  make_unique_mdarray(OtherIndexTypes... exts)
+{
+  return make_unique_mdarray<ElementType>(dims<sizeof...(OtherIndexTypes)>{exts...});
 }
 
 } // namespace md
