@@ -117,25 +117,54 @@ int    num_out = 0; // The number of outputs performed so far
 int    direction_switch = 1;
 
 //Declaring the functions defined after "main"
-void   init                 ( int *argc , char ***argv );
-void   finalize             ( );
-void   injection            ( double x , double z , double &r , double &u , double &w , double &t , double &hr , double &ht );
-void   density_current      ( double x , double z , double &r , double &u , double &w , double &t , double &hr , double &ht );
-void   gravity_waves        ( double x , double z , double &r , double &u , double &w , double &t , double &hr , double &ht );
-void   thermal              ( double x , double z , double &r , double &u , double &w , double &t , double &hr , double &ht );
-void   collision            ( double x , double z , double &r , double &u , double &w , double &t , double &hr , double &ht );
-void   hydro_const_theta    ( double z                   , double &r , double &t );
-void   hydro_const_bvfreq   ( double z , double bv_freq0 , double &r , double &t );
-double sample_ellipse_cosine( double x , double z , double amp , double x0 , double z0 , double xrad , double zrad );
-void   output               (view_3d state, double etime);
-void   ncwrap               (int ierr, int line);
-void   perform_timestep     (view_3d state, view_3d state_tmp, view_3d flux, view_3d tend, double dt);
-void   semi_discrete_step   (view_3d state_init, view_3d state_forcing, view_3d state_out,
-                             double dt, int dir, view_3d flux, view_3d tend);
-void   compute_tendencies_x (view_3d state, view_3d flux, view_3d tend, double dt);
-void   compute_tendencies_z (view_3d state, view_3d flux, view_3d tend, double dt);
-void   set_halo_values_x    (view_3d state);
-void   set_halo_values_z    (view_3d state);
+void init(int *argc , char ***argv );
+void finalize();
+
+struct test_case {
+  double r;
+  double u;
+  double w;
+  double t;
+  double hr;
+  double ht;
+};
+
+test_case injection(double x, double z);
+test_case density_current(double x, double z);
+test_case gravity_waves(double x, double z);
+test_case thermal(double x, double z);
+test_case collision(double x, double z);
+
+test_case get_test_case(int data_spec, double x_, double z_) {
+  if (data_spec == DATA_SPEC_COLLISION      ) { return collision(x_, z_); }
+  if (data_spec == DATA_SPEC_THERMAL        ) { return thermal(x_, z_); }
+  if (data_spec == DATA_SPEC_GRAVITY_WAVES  ) { return gravity_waves(x_, z_); }
+  if (data_spec == DATA_SPEC_DENSITY_CURRENT) { return density_current(x_, z_); }
+  if (data_spec == DATA_SPEC_INJECTION      ) { return injection(x_, z_); }
+  assert(false);
+  return test_case{};
+}
+
+struct r_t_pair {
+  double r;
+  double t;
+};
+
+r_t_pair hydro_const_theta(double z);
+r_t_pair hydro_const_bvfreq(double z, double bv_freq0);
+double sample_ellipse_cosine(double x, double z, double amp, double x0, double z0,
+                             double xrad, double zrad);
+
+void output(view_3d state, double etime);
+void ncwrap(int ierr, int line);
+void perform_timestep(view_3d state, view_3d state_tmp,
+                      view_3d flux, view_3d tend, double dt);
+void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state_out,
+                        double dt, int dir, view_3d flux, view_3d tend);
+void compute_tendencies_x(view_3d state, view_3d flux, view_3d tend, double dt);
+void compute_tendencies_z(view_3d state, view_3d flux, view_3d tend, double dt);
+void set_halo_values_x(view_3d state);
+void set_halo_values_z(view_3d state);
 
 struct reduction_result {
   double mass;
@@ -270,28 +299,9 @@ void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state
     for (int k = 0; k < nz; ++k) {
       for (int i = 0; i < nx; ++i) {
         if (data_spec_int == DATA_SPEC_GRAVITY_WAVES) {
-          double x = (i_beg + i+0.5)*dx;
-          double z = (k_beg + k+0.5)*dz;
-          // Using sample_ellipse_cosine requires "acc routine" in OpenACC and "declare target" in OpenMP offload
-          // Neither of these are particularly well supported. So I'm manually inlining here
-          // wpert = sample_ellipse_cosine( x,z , 0.01 , xlen/8,1000., 500.,500. );
-          
-          double wpert = 0.0;
-          {
-            double x0   = xlen/8;
-            double z0   = 1000;
-            double xrad = 500;
-            double zrad = 500;
-            double amp  = 0.01;
-            //Compute distance from bubble center
-            double dist = sqrt( ((x-x0)/xrad)*((x-x0)/xrad) + ((z-z0)/zrad)*((z-z0)/zrad) ) * pi / 2.;
-            //If the distance from bubble center is less than the radius, create a cos**2 profile
-            if (dist <= pi / 2.) {
-              wpert = amp * pow(cos(dist),2.);
-            } else {
-              wpert = 0.;
-            }
-          }
+          const double x = (i_beg + i+0.5)*dx;
+          const double z = (k_beg + k+0.5)*dz;
+          const double wpert = sample_ellipse_cosine(x, z, 0.01, xlen/8, 1000.0, 500.0, 500.0);
           tend(ID_WMOM, k, i) += wpert*hy_dens_cell[hs+k];
         }
         state_out(ll, k+hs, i+hs) = state_init(ll, k+hs, i+hs) + dt * tend(ll, k, i);
@@ -360,9 +370,9 @@ void compute_tendencies_x(view_3d state, view_3d flux, view_3d tend, double dt) 
 //First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
 void compute_tendencies_z(view_3d state, view_3d flux, view_3d tend, double dt) {
-  double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS], hv_coef;
+  double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS];
   //Compute the hyperviscosity coefficient
-  hv_coef = -hv_beta * dz / (16*dt);
+  const double hv_coef = -hv_beta * dz / (16*dt);
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
@@ -488,8 +498,6 @@ void set_halo_values_z(view_3d state) {
 
 
 void init( int *argc , char ***argv ) {
-  double x, z, r, u, w, t, hr, ht;
-
   (void) MPI_Init(argc,argv);
 
   /////////////////////////////////////////////////////////////
@@ -523,13 +531,10 @@ void init( int *argc , char ***argv ) {
   mainproc = (myrank == 0);
 
   //Allocate the model data
-  {
-    auto state_mapping = md::layout_right::template mapping<md::dims<3>>{md::dims<3>{NUM_VARS, nz+2*hs, nx+2*hs}};
-    state              = md::make_unique_mdarray<double>(state_mapping);
-    state_tmp          = md::make_unique_mdarray<double>(state_mapping);
-  }
-  flux               = md::make_unique_mdarray<double>(md::dims<3>{NUM_VARS, nz+1, nx+1});
-  tend               = md::make_unique_mdarray<double>(md::dims<3>{NUM_VARS, nz, nx});
+  state              = md::make_unique_mdarray<double>(NUM_VARS, nz+2*hs, nx+2*hs);
+  state_tmp          = md::make_unique_mdarray<double>(NUM_VARS, nz+2*hs, nx+2*hs);
+  flux               = md::make_unique_mdarray<double>(NUM_VARS, nz+1, nx+1);
+  tend               = md::make_unique_mdarray<double>(NUM_VARS, nz, nx);
   hy_dens_cell       = std::make_unique<double[]>(nz+2*hs);
   hy_dens_theta_cell = std::make_unique<double[]>(nz+2*hs);
   hy_dens_int        = std::make_unique<double[]>(nz+1);
@@ -564,15 +569,11 @@ void init( int *argc , char ***argv ) {
       for (int kk = 0; kk < nqpoints; ++kk) {
         for (int ii = 0; ii < nqpoints; ++ii) {
           //Compute the x,z location within the global domain based on cell and quadrature index
-          x = (i_beg + i-hs+0.5)*dx + (qpoints[ii]-0.5)*dx;
-          z = (k_beg + k-hs+0.5)*dz + (qpoints[kk]-0.5)*dz;
+          const double x = (i_beg + i-hs+0.5)*dx + (qpoints[ii]-0.5)*dx;
+          const double z = (k_beg + k-hs+0.5)*dz + (qpoints[kk]-0.5)*dz;
 
           //Set the fluid state based on the user's specification
-          if (data_spec_int == DATA_SPEC_COLLISION      ) { collision      (x,z,r,u,w,t,hr,ht); }
-          if (data_spec_int == DATA_SPEC_THERMAL        ) { thermal        (x,z,r,u,w,t,hr,ht); }
-          if (data_spec_int == DATA_SPEC_GRAVITY_WAVES  ) { gravity_waves  (x,z,r,u,w,t,hr,ht); }
-          if (data_spec_int == DATA_SPEC_DENSITY_CURRENT) { density_current(x,z,r,u,w,t,hr,ht); }
-          if (data_spec_int == DATA_SPEC_INJECTION      ) { injection      (x,z,r,u,w,t,hr,ht); }
+          auto [r, u, w, t, hr, ht] = get_test_case(data_spec_int, x, z);
 
           //Store into the fluid state array
           state(ID_DENS, k, i) = state(ID_DENS, k, i) + r                         * qweights[ii]*qweights[kk];
@@ -591,28 +592,20 @@ void init( int *argc , char ***argv ) {
     hy_dens_cell      [k] = 0.;
     hy_dens_theta_cell[k] = 0.;
     for (int kk = 0; kk < nqpoints; ++kk) {
-      z = (k_beg + k-hs+0.5)*dz;
+      const double z = (k_beg + k-hs+0.5)*dz;
       //Set the fluid state based on the user's specification
-      if (data_spec_int == DATA_SPEC_COLLISION      ) { collision      (0.,z,r,u,w,t,hr,ht); }
-      if (data_spec_int == DATA_SPEC_THERMAL        ) { thermal        (0.,z,r,u,w,t,hr,ht); }
-      if (data_spec_int == DATA_SPEC_GRAVITY_WAVES  ) { gravity_waves  (0.,z,r,u,w,t,hr,ht); }
-      if (data_spec_int == DATA_SPEC_DENSITY_CURRENT) { density_current(0.,z,r,u,w,t,hr,ht); }
-      if (data_spec_int == DATA_SPEC_INJECTION      ) { injection      (0.,z,r,u,w,t,hr,ht); }
+      auto [r, u, w, t, hr, ht] = get_test_case(data_spec_int, 0.0, z);
       hy_dens_cell      [k] = hy_dens_cell      [k] + hr    * qweights[kk];
       hy_dens_theta_cell[k] = hy_dens_theta_cell[k] + hr*ht * qweights[kk];
     }
   }
   //Compute the hydrostatic background state at vertical cell interfaces
   for (int k = 0; k < nz+1; ++k) {
-    z = (k_beg + k)*dz;
-    if (data_spec_int == DATA_SPEC_COLLISION      ) { collision      (0.,z,r,u,w,t,hr,ht); }
-    if (data_spec_int == DATA_SPEC_THERMAL        ) { thermal        (0.,z,r,u,w,t,hr,ht); }
-    if (data_spec_int == DATA_SPEC_GRAVITY_WAVES  ) { gravity_waves  (0.,z,r,u,w,t,hr,ht); }
-    if (data_spec_int == DATA_SPEC_DENSITY_CURRENT) { density_current(0.,z,r,u,w,t,hr,ht); }
-    if (data_spec_int == DATA_SPEC_INJECTION      ) { injection      (0.,z,r,u,w,t,hr,ht); }
+    const double z = (k_beg + k)*dz;
+    auto [r, u, w, t, hr, ht] = get_test_case(data_spec_int, 0.0, z);
     hy_dens_int      [k] = hr;
-    hy_dens_theta_int[k] = hr*ht;
-    hy_pressure_int  [k] = C0*pow((hr*ht),gamm);
+    hy_dens_theta_int[k] = hr * ht;
+    hy_pressure_int  [k] = C0 * pow(hr * ht, gamm);
   }
 }
 
@@ -621,12 +614,13 @@ void init( int *argc , char ***argv ) {
 //x and z are input coordinates at which to sample
 //r,u,w,t are output density, u-wind, w-wind, and potential temperature at that location
 //hr and ht are output background hydrostatic density and potential temperature at that location
-void injection( double x , double z , double &r , double &u , double &w , double &t , double &hr , double &ht ) {
-  hydro_const_theta(z,hr,ht);
-  r = 0.;
-  t = 0.;
-  u = 0.;
-  w = 0.;
+test_case injection(double x , double z) {
+  auto [hr, ht] = hydro_const_theta(z);
+  double r = 0.0;
+  double t = 0.0;
+  double u = 0.0;
+  double w = 0.0;
+  return {r, u, w, t, hr, ht};
 }
 
 
@@ -634,25 +628,26 @@ void injection( double x , double z , double &r , double &u , double &w , double
 //x and z are input coordinates at which to sample
 //r,u,w,t are output density, u-wind, w-wind, and potential temperature at that location
 //hr and ht are output background hydrostatic density and potential temperature at that location
-void density_current( double x , double z , double &r , double &u , double &w , double &t , double &hr , double &ht ) {
-  hydro_const_theta(z,hr,ht);
-  r = 0.;
-  t = 0.;
-  u = 0.;
-  w = 0.;
-  t = t + sample_ellipse_cosine(x,z,-20. ,xlen/2,5000.,4000.,2000.);
+test_case density_current(double x , double z) {
+  auto [hr, ht] = hydro_const_theta(z);
+  double r = 0.0;
+  double t = sample_ellipse_cosine(x, z, -20.0, xlen/2, 5000.0, 4000.0, 2000.0);
+  double u = 0.0;
+  double w = 0.0;
+  return {r, u, w, t, hr, ht};
 }
 
 
 //x and z are input coordinates at which to sample
 //r,u,w,t are output density, u-wind, w-wind, and potential temperature at that location
 //hr and ht are output background hydrostatic density and potential temperature at that location
-void gravity_waves( double x , double z , double &r , double &u , double &w , double &t , double &hr , double &ht ) {
-  hydro_const_bvfreq(z,0.02,hr,ht);
-  r = 0.;
-  t = 0.;
-  u = 15.;
-  w = 0.;
+test_case gravity_waves(double x, double z) {
+  auto [hr, ht] = hydro_const_bvfreq(z, 0.02);
+  double r = 0.0;
+  double t = 0.0;
+  double u = 15.0;
+  double w = 0.0;
+  return {r, u, w, t, hr, ht};
 }
 
 
@@ -660,13 +655,13 @@ void gravity_waves( double x , double z , double &r , double &u , double &w , do
 //x and z are input coordinates at which to sample
 //r,u,w,t are output density, u-wind, w-wind, and potential temperature at that location
 //hr and ht are output background hydrostatic density and potential temperature at that location
-void thermal( double x , double z , double &r , double &u , double &w , double &t , double &hr , double &ht ) {
-  hydro_const_theta(z,hr,ht);
-  r = 0.;
-  t = 0.;
-  u = 0.;
-  w = 0.;
-  t = t + sample_ellipse_cosine(x,z, 3. ,xlen/2,2000.,2000.,2000.);
+test_case thermal(double x, double z) {
+  auto [hr, ht] = hydro_const_theta(z);
+  double r = 0.0;
+  double t = sample_ellipse_cosine(x, z, 3.0, xlen/2,2000.0, 2000.0, 2000.0);
+  double u = 0.0;
+  double w = 0.0;
+  return {r, u, w, t, hr, ht};
 }
 
 
@@ -674,30 +669,33 @@ void thermal( double x , double z , double &r , double &u , double &w , double &
 //x and z are input coordinates at which to sample
 //r,u,w,t are output density, u-wind, w-wind, and potential temperature at that location
 //hr and ht are output background hydrostatic density and potential temperature at that location
-void collision( double x , double z , double &r , double &u , double &w , double &t , double &hr , double &ht ) {
-  hydro_const_theta(z,hr,ht);
-  r = 0.;
-  t = 0.;
-  u = 0.;
-  w = 0.;
-  t = t + sample_ellipse_cosine(x,z, 20.,xlen/2,2000.,2000.,2000.);
-  t = t + sample_ellipse_cosine(x,z,-20.,xlen/2,8000.,2000.,2000.);
+test_case collision(double x , double z) {
+  auto [hr, ht] = hydro_const_theta(z);
+  double r = 0.0;
+  double t = 0.0;
+  double u = 0.0;
+  double w = 0.0;
+  t = t + sample_ellipse_cosine(x, z,  20.0, xlen/2,2000.0, 2000.0, 2000.0);
+  t = t + sample_ellipse_cosine(x, z, -20.0, xlen/2,8000.0, 2000.0, 2000.0);
+  return {r, u, w, t, hr, ht};
 }
 
 
 //Establish hydrostatic balance using constant potential temperature (thermally neutral atmosphere)
 //z is the input coordinate
 //r and t are the output background hydrostatic density and potential temperature
-void hydro_const_theta( double z , double &r , double &t ) {
+r_t_pair hydro_const_theta(double z) {
   const double theta0 = 300.;  //Background potential temperature
   const double exner0 = 1.;    //Surface-level Exner pressure
   double       p,exner,rt;
   //Establish hydrostatic balance first using Exner pressure
-  t = theta0;                                  //Potential Temperature at z
-  exner = exner0 - grav * z / (cp * theta0);   //Exner pressure at z
-  p = p0 * pow(exner,(cp/rd));                 //Pressure at z
-  rt = pow((p / C0),(1. / gamm));             //rho*theta at z
-  r = rt / t;                                  //Density at z
+  double t = theta0;                         //Potential Temperature at z
+  exner = exner0 - grav * z / (cp * theta0); //Exner pressure at z
+  p = p0 * pow(exner,(cp/rd));               //Pressure at z
+  rt = pow((p / C0),(1. / gamm));            //rho*theta at z
+  double r = rt / t;                         //Density at z
+
+  return {r, t};
 }
 
 
@@ -705,15 +703,17 @@ void hydro_const_theta( double z , double &r , double &t ) {
 //z is the input coordinate
 //bv_freq0 is the constant Brunt-Vaisala frequency
 //r and t are the output background hydrostatic density and potential temperature
-void hydro_const_bvfreq( double z , double bv_freq0 , double &r , double &t ) {
+r_t_pair hydro_const_bvfreq(double z, double bv_freq0) {
   const double theta0 = 300.;  //Background potential temperature
   const double exner0 = 1.;    //Surface-level Exner pressure
   double       p, exner, rt;
-  t = theta0 * exp( bv_freq0*bv_freq0 / grav * z );                                    //Pot temp at z
+  double t = theta0 * exp( bv_freq0*bv_freq0 / grav * z );                                    //Pot temp at z
   exner = exner0 - grav*grav / (cp * bv_freq0*bv_freq0) * (t - theta0) / (t * theta0); //Exner pressure at z
   p = p0 * pow(exner,(cp/rd));                                                         //Pressure at z
-  rt = pow((p / C0),(1. / gamm));                                                  //rho*theta at z
-  r = rt / t;                                                                          //Density at z
+  rt = pow((p / C0), (1. / gamm));                                                  //rho*theta at z
+  double r = rt / t;                                                                          //Density at z
+
+  return {r, t};
 }
 
 
@@ -723,10 +723,10 @@ void hydro_const_bvfreq( double z , double bv_freq0 , double &r , double &t ) {
 double sample_ellipse_cosine( double x , double z , double amp , double x0 , double z0 , double xrad , double zrad ) {
   double dist;
   //Compute distance from bubble center
-  dist = sqrt( ((x-x0)/xrad)*((x-x0)/xrad) + ((z-z0)/zrad)*((z-z0)/zrad) ) * pi / 2.;
+  dist = sqrt( ((x-x0)/xrad)*((x-x0)/xrad) + ((z-z0)/zrad)*((z-z0)/zrad) ) * pi / 2.0;
   //If the distance from bubble center is less than the radius, create a cos**2 profile
-  if (dist <= pi / 2.) {
-    return amp * pow(cos(dist),2.);
+  if (dist <= pi / 2.0) {
+    return amp * pow(cos(dist), 2.0);
   } else {
     return 0.;
   }
@@ -748,17 +748,12 @@ void output(view_3d state, double etime) {
   if (mainproc) { fprintf(stderr, "*** OUTPUT ***\n"); }
 
   //Temporary arrays to hold density, u-wind, w-wind, and potential temperature (theta).
-  //
-  // As with state, we retain the reversed order of extents.
-  // Some compilers aren't so good at CTAD for mapping.
-  auto mapping_2d = md::layout_right::template mapping<md::dims<2>>{md::dims<2>{nz, nx}};
-
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
-  auto dens     = md::make_unique_mdarray<double>(mapping_2d);
-  auto uwnd     = md::make_unique_mdarray<double>(mapping_2d);
-  auto wwnd     = md::make_unique_mdarray<double>(mapping_2d);
+  auto dens     = md::make_unique_mdarray<double>(nz, nx);
+  auto uwnd     = md::make_unique_mdarray<double>(nz, nx);
+  auto wwnd     = md::make_unique_mdarray<double>(nz, nx);
 #endif
-  auto theta    = md::make_unique_mdarray<double>(mapping_2d);
+  auto theta    = md::make_unique_mdarray<double>(nz, nx);
   auto etimearr = std::make_unique<double[]>(1);
 
   // PNetCDF needs an MPI_Info object that is not MPI_INFO_NULL.
