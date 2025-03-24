@@ -548,14 +548,23 @@ constexpr unique_mdarray<ElementType, extents<IndexType, Exts...>, layout_right>
   return make_unique_mdarray<ElementType>(layout_right::template mapping<extents_type>{exts});
 }
 
-// NEEDS A BIT MORE TESTING
-#if 0
+//
+// Special case for rank-0 array (with a single element).
+//
+template<class ElementType>
+constexpr unique_mdarray<ElementType, dims<0>>
+  make_unique_mdarray()
+{
+  return make_unique_mdarray<ElementType>(dims<0>{});
+}
+
 //
 // Another make_unique<T[]>(size_t) analog; it takes a list of extents
 // (as things convertible to index_type, generally integers).
 //
-template<class ElementType, size_t InputExtent, class... OtherIndexTypes>
+template<class ElementType, class... OtherIndexTypes>
 requires(
+  (sizeof...(OtherIndexTypes) != 0) &&
   (std::is_convertible_v<OtherIndexTypes, size_t> && ...) &&
   (std::is_nothrow_constructible_v<size_t, OtherIndexTypes> && ...)
 )
@@ -564,6 +573,5 @@ constexpr unique_mdarray<ElementType, dims<sizeof...(OtherIndexTypes)>>
 {
   return make_unique_mdarray<ElementType>(dims<sizeof...(OtherIndexTypes)>{exts...});
 }
-#endif
 
 } // namespace md
