@@ -249,10 +249,64 @@ void construction(const Deleter& d) {
   }
 }
 
+void make_unique_mdarray_with_mapping() {
+  {
+    using extents_type = md::dims<0>;
+    const extents_type exts{};
+    const auto mapping = md::layout_right::template mapping<extents_type>{exts};
+    auto x = md::make_unique_mdarray<float>(mapping);
+    using x_type = decltype(x);
+    static_assert(std::is_same_v<x_type::extents_type, extents_type>);
+    static_assert(std::is_same_v<x_type::layout_type, md::layout_right>);
+    static_assert(x.rank() == 0);
+    assert(x.mapping().extents() == exts);
+  }
+  {
+    using extents_type = md::dims<1>;
+    const extents_type exts{3};
+    const auto mapping = md::layout_right::template mapping<extents_type>{exts};
+    auto x = md::make_unique_mdarray<float>(mapping);
+    using x_type = decltype(x);
+    static_assert(std::is_same_v<x_type::extents_type, extents_type>);
+    static_assert(std::is_same_v<x_type::layout_type, md::layout_right>);
+    static_assert(x.rank() == 1);
+    assert(x.mapping().extents() == exts);
+    assert(x.extent(0) == 3);
+  }
+  {
+    using extents_type = md::dims<2>;
+    const extents_type exts{3, 5};
+    const auto mapping = md::layout_right::template mapping<extents_type>{exts};
+    auto x = md::make_unique_mdarray<float>(mapping);
+    using x_type = decltype(x);
+    static_assert(std::is_same_v<x_type::extents_type, extents_type>);
+    static_assert(std::is_same_v<x_type::layout_type, md::layout_right>);
+    static_assert(x.rank() == 2);
+    assert(x.mapping().extents() == exts);
+    assert(x.extent(0) == 3);
+    assert(x.extent(1) == 5);
+  }
+}
+
+void make_unique_mdarray_with_extents() {
+  const auto exts = md::dims<3>{3, 5, 7};
+  auto x = md::make_unique_mdarray<float>(exts);
+  using x_type = decltype(x);
+  static_assert(std::is_same_v<x_type::extents_type, md::dims<3>>);
+  static_assert(std::is_same_v<x_type::layout_type, md::layout_right>);
+  static_assert(x.rank() == 3);
+  assert(x.mapping().extents() == exts);
+  assert(x.extent(0) == 3);
+  assert(x.extent(1) == 5);
+  assert(x.extent(2) == 7);
+}
+
 } // namespace test
 
 int main() {
   test::construction(std::default_delete<float[]>{});
   test::construction(test::my_array_deleter<float>{});
+  test::make_unique_mdarray_with_mapping();
+  test::make_unique_mdarray_with_extents();
   return 0;
 }

@@ -541,12 +541,15 @@ constexpr unique_mdarray<ElementType, typename Mapping::extents_type, typename M
 // Another analog of make_unique<T[]>: it takes an extents object instead of a size.
 //
 template<class ElementType, class IndexType, size_t... Exts>
-constexpr unique_mdarray<ElementType, extents<IndexType, Exts...>>
+constexpr unique_mdarray<ElementType, extents<IndexType, Exts...>, layout_right>
   make_unique_mdarray(const extents<IndexType, Exts...>& exts)
 {
+  using extents_type = extents<IndexType, Exts...>;
   return make_unique_mdarray<ElementType>(layout_right::template mapping<extents_type>{exts});
 }
 
+// NEEDS A BIT MORE TESTING
+#if 0
 //
 // Another make_unique<T[]>(size_t) analog; it takes a list of extents
 // (as things convertible to index_type, generally integers).
@@ -561,5 +564,6 @@ constexpr unique_mdarray<ElementType, dims<sizeof...(OtherIndexTypes)>>
 {
   return make_unique_mdarray<ElementType>(dims<sizeof...(OtherIndexTypes)>{exts...});
 }
+#endif
 
 } // namespace md
