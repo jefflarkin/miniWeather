@@ -82,11 +82,11 @@ int    i_beg, k_beg;          //beginning index in the x- and z-directions for t
 int    nranks, myrank;        //Number of MPI ranks and my rank id
 int    left_rank, right_rank; //MPI Rank IDs that exist to my left and right in the global domain
 int    mainproc;            //Am I the main process (rank == 0)?
-double *hy_dens_cell;         //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
-double *hy_dens_theta_cell;   //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
-double *hy_dens_int;          //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
-double *hy_dens_theta_int;    //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
-double *hy_pressure_int;      //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
+std::unique_ptr<double[]> hy_dens_cell;         //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
+std::unique_ptr<double[]> hy_dens_theta_cell;   //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
+std::unique_ptr<double[]> hy_dens_int;          //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
+std::unique_ptr<double[]> hy_dens_theta_int;    //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
+std::unique_ptr<double[]> hy_pressure_int;      //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
 
 ///////////////////////////////////////////////////////////////////////////////////////
 // Variables that are dynamics over the course of the simulation
@@ -94,17 +94,14 @@ double *hy_pressure_int;      //hydrostatic press (vert cell interf).   Dimensio
 double etime;                 //Elapsed model time
 double output_counter;        //Helps determine when it's time to do output
 //Runtime variable arrays
-double *state;                //Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
-double *state_tmp;            //Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
-double *flux;                 //Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
-double *tend;                 //Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
+std::unique_ptr<double[]> state;                //Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
+std::unique_ptr<double[]> state_tmp;            //Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
+std::unique_ptr<double[]> flux;                 //Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
+std::unique_ptr<double[]> tend;                 //Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
 int    num_out = 0;           //The number of outputs performed so far
 int    direction_switch = 1;
 double mass0, te0;            //Initial domain totals for mass and total energy  
 double mass , te ;            //Domain totals for mass and total energy  
-
-//How is this not in the standard?!
-double dmin( double a , double b ) { if (a<b) {return a;} else {return b;} };
 
 
 //Declaring the functions defined after "main"
@@ -144,7 +141,7 @@ int main(int argc, char **argv) {
   }
 
   //Output the initial state
-  output(state,etime);
+  output(state.get(), etime);
 
   ////////////////////////////////////////////////////
   // MAIN TIME STEP LOOP
@@ -154,7 +151,7 @@ int main(int argc, char **argv) {
     //If the time step leads to exceeding the simulation time, shorten it for the last step
     if (etime + dt > sim_time) { dt = sim_time - etime; }
     //Perform a single time step
-    perform_timestep(state,state_tmp,flux,tend,dt);
+    perform_timestep(state.get(), state_tmp.get(), flux.get(), tend.get(), dt);
     //Inform the user
 #ifndef NO_INFORM
     if (mainproc) { fprintf(stderr, "Elapsed Time: %lf / %lf\n", etime , sim_time ); }
@@ -165,7 +162,7 @@ int main(int argc, char **argv) {
     //If it's time for output, reset the counter, and do output
     if (output_counter >= output_freq) {
       output_counter = output_counter - output_freq;
-      output(state,etime);
+      output(state.get(), etime);
     }
 #if 0
     {
@@ -459,14 +456,11 @@ void set_halo_values_x( double *state ) {
 //Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
 //decomposition in the vertical direction
 void set_halo_values_z( double *state ) {
-  int          i, ll;
-  const double mnt_width = xlen/8;
-  double       x, xloc, mnt_deriv;
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
-  for (ll=0; ll<NUM_VARS; ll++) {
-    for (i=0; i<nx+2*hs; i++) {
+  for (int ll=0; ll<NUM_VARS; ll++) {
+    for (int i=0; i<nx+2*hs; i++) {
       if (ll == ID_WMOM) {
         state[ll*(nz+2*hs)*(nx+2*hs) + (0      )*(nx+2*hs) + i] = 0.;
         state[ll*(nz+2*hs)*(nx+2*hs) + (1      )*(nx+2*hs) + i] = 0.;
@@ -489,10 +483,10 @@ void set_halo_values_z( double *state ) {
 
 
 void init( int *argc , char ***argv ) {
-  int    i, k, ii, kk, ll, ierr, inds;
+  int    i, k, ii, kk, ll, inds;
   double x, z, r, u, w, t, hr, ht;
 
-  ierr = MPI_Init(argc,argv);
+  (void) MPI_Init(argc,argv);
 
   /////////////////////////////////////////////////////////////
   // BEGIN MPI DUMMY SECTION
@@ -525,18 +519,18 @@ void init( int *argc , char ***argv ) {
   mainproc = (myrank == 0);
 
   //Allocate the model data
-  state              = (double *) malloc( (nx+2*hs)*(nz+2*hs)*NUM_VARS*sizeof(double) );
-  state_tmp          = (double *) malloc( (nx+2*hs)*(nz+2*hs)*NUM_VARS*sizeof(double) );
-  flux               = (double *) malloc( (nx+1)*(nz+1)*NUM_VARS*sizeof(double) );
-  tend               = (double *) malloc( nx*nz*NUM_VARS*sizeof(double) );
-  hy_dens_cell       = (double *) malloc( (nz+2*hs)*sizeof(double) );
-  hy_dens_theta_cell = (double *) malloc( (nz+2*hs)*sizeof(double) );
-  hy_dens_int        = (double *) malloc( (nz+1)*sizeof(double) );
-  hy_dens_theta_int  = (double *) malloc( (nz+1)*sizeof(double) );
-  hy_pressure_int    = (double *) malloc( (nz+1)*sizeof(double) );
+  state              = std::make_unique<double[]>( (nx+2*hs)*(nz+2*hs)*NUM_VARS );
+  state_tmp          = std::make_unique<double[]>( (nx+2*hs)*(nz+2*hs)*NUM_VARS );
+  flux               = std::make_unique<double[]>( (nx+1)*(nz+1)*NUM_VARS );
+  tend               = std::make_unique<double[]>( nx*nz*NUM_VARS );
+  hy_dens_cell       = std::make_unique<double[]>( (nz+2*hs) );
+  hy_dens_theta_cell = std::make_unique<double[]>( (nz+2*hs) );
+  hy_dens_int        = std::make_unique<double[]>( (nz+1) );
+  hy_dens_theta_int  = std::make_unique<double[]>( (nz+1) );
+  hy_pressure_int    = std::make_unique<double[]>( (nz+1) );
 
   //Define the maximum stable time step based on an assumed maximum wind speed
-  dt = dmin(dx,dz) / max_speed * cfl;
+  dt = fmin(dx,dz) / max_speed * cfl;
   //Set initial elapsed model time and output_counter to zero
   etime = 0.;
   output_counter = 0.;
@@ -548,7 +542,7 @@ void init( int *argc , char ***argv ) {
     fprintf(stderr, "dt: %lf\n",dt);
   }
   //Want to make sure this info is displayed before further output
-  ierr = MPI_Barrier(MPI_COMM_WORLD);
+  (void) MPI_Barrier(MPI_COMM_WORLD);
 
   //////////////////////////////////////////////////////////////////////////
   // Initialize the cell-averaged fluid state via Gauss-Legendre quadrature
@@ -742,23 +736,24 @@ double sample_ellipse_cosine( double x , double z , double amp , double x0 , dou
 //The file I/O uses parallel-netcdf, the only external library required for this mini-app.
 //If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
 void output( double *state , double etime ) {
-#if 1
-  int ncid, t_dimid, x_dimid, z_dimid, dens_varid, uwnd_varid, wwnd_varid, theta_varid, t_varid, dimids[3];
-  int i, k, ind_r, ind_u, ind_w, ind_t;
+  int ncid, t_dimid, x_dimid, z_dimid, theta_varid, t_varid, dimids[3];
+  int i, k, ind_r, ind_t;
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
+  int ind_u, ind_w, dens_varid, uwnd_varid, wwnd_varid;
+#endif
   MPI_Offset st1[1], ct1[1], st3[3], ct3[3];
-  //Temporary arrays to hold density, u-wind, w-wind, and potential temperature (theta)
-  double *dens, *uwnd, *wwnd, *theta;
-  double *etimearr;
+
   //Inform the user
   if (mainproc) { fprintf(stderr, "*** OUTPUT ***\n"); }
-  //Allocate some (big) temp arrays
+
+  //Temporary arrays to hold density, u-wind, w-wind, and potential temperature (theta)
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
-  dens     = (double *) malloc(nx*nz*sizeof(double));
-  uwnd     = (double *) malloc(nx*nz*sizeof(double));
-  wwnd     = (double *) malloc(nx*nz*sizeof(double));
+  auto dens     = std::make_unique<double[]>(nx*nz);
+  auto uwnd     = std::make_unique<double[]>(nx*nz);
+  auto wwnd     = std::make_unique<double[]>(nx*nz);
 #endif
-  theta    = (double *) malloc(nx*nz*sizeof(double));
-  etimearr = (double *) malloc(1    *sizeof(double));
+  auto theta    = std::make_unique<double[]>(nx*nz);
+  auto etimearr = std::make_unique<double[]>(1);
 
   // PNetCDF needs an MPI_Info object that is not MPI_INFO_NULL.
   // It's possible that earlier PNetCDF versions tolerated MPI_INFO_NULL.
@@ -828,7 +823,7 @@ void output( double *state , double etime ) {
   ncwrap( ncmpi_put_vara_double_all( ncid ,  uwnd_varid , st3 , ct3 , uwnd  ) , __LINE__ );
   ncwrap( ncmpi_put_vara_double_all( ncid ,  wwnd_varid , st3 , ct3 , wwnd  ) , __LINE__ );
 #endif
-  ncwrap( ncmpi_put_vara_double_all( ncid , theta_varid , st3 , ct3 , theta ) , __LINE__ );
+  ncwrap( ncmpi_put_vara_double_all( ncid , theta_varid , st3 , ct3 , theta.get() ) , __LINE__ );
 
   //Only the main process needs to write the elapsed time
   //Begin "independent" write mode
@@ -838,29 +833,18 @@ void output( double *state , double etime ) {
     st1[0] = num_out;
     ct1[0] = 1;
     etimearr[0] = etime;
-    ncwrap( ncmpi_put_vara_double( ncid , t_varid , st1 , ct1 , etimearr ) , __LINE__ );
+    ncwrap( ncmpi_put_vara_double( ncid , t_varid , st1 , ct1 , etimearr.get() ) , __LINE__ );
   }
   //End "independent" write mode
   ncwrap( ncmpi_end_indep_data(ncid) , __LINE__ );
 
   //Close the file
   ncwrap( ncmpi_close(ncid) , __LINE__ );
-#endif // 0
+
   //Increment the number of outputs
   num_out = num_out + 1;
 
-#if 1
-  MPI_Info_free(&mpi_info);
-  
-  //Deallocate the temp arrays
-#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)      
-  free( dens     );
-  free( uwnd     );
-  free( wwnd     );
-#endif
-  free( theta    );
-  free( etimearr );
-#endif // 0
+  (void) MPI_Info_free(&mpi_info);
 }
 
 
@@ -875,17 +859,7 @@ void ncwrap( int ierr , int line ) {
 
 
 void finalize() {
-  int ierr;
-  free( state );
-  free( state_tmp );
-  free( flux );
-  free( tend );
-  free( hy_dens_cell );
-  free( hy_dens_theta_cell );
-  free( hy_dens_int );
-  free( hy_dens_theta_int );
-  free( hy_pressure_int );
-  ierr = MPI_Finalize();
+  (void) MPI_Finalize();
 }
 
 
