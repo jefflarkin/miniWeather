@@ -100,8 +100,6 @@ std::unique_ptr<double[]> flux;                 //Cell interface fluxes.   Dimen
 std::unique_ptr<double[]> tend;                 //Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
 int    num_out = 0;           //The number of outputs performed so far
 int    direction_switch = 1;
-double mass0, te0;            //Initial domain totals for mass and total energy  
-double mass , te ;            //Domain totals for mass and total energy  
 
 
 //Declaring the functions defined after "main"
@@ -123,7 +121,12 @@ void   compute_tendencies_x ( double *state , double *flux , double *tend , doub
 void   compute_tendencies_z ( double *state , double *flux , double *tend , double dt);
 void   set_halo_values_x    ( double *state );
 void   set_halo_values_z    ( double *state );
-void   reductions           ( double &mass , double &te );
+
+struct reduction_result {
+  double mass;
+  double te;
+};
+reduction_result reductions();
 
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -133,8 +136,11 @@ int main(int argc, char **argv) {
 
   init( &argc , &argv );
 
-  //Initial reductions for mass, kinetic energy, and total energy
-  reductions(mass0,te0);
+  //Initial reductions for mass, kinetic energy, and total energy.
+  //
+  // mass0: initial domain total for mass
+  // te0:   initial domain total for total energy
+  auto [mass0, te0] = reductions();
   {
     fprintf(stderr, "mass0: %le\n" , mass0);
     fprintf(stderr, "te0:   %le\n" , te0  );
@@ -166,9 +172,7 @@ int main(int argc, char **argv) {
     }
 #if 0
     {
-      double mass = 0.0;
-      double te = 0.0;
-      reductions(mass, te);
+      auto [mass, te] = reductions();
       fprintf(stderr, "mass: %le\n" , mass );
       fprintf(stderr, "te:   %le\n" , te   );
     }
@@ -180,7 +184,7 @@ int main(int argc, char **argv) {
   }
 
   //Final reductions for mass, kinetic energy, and total energy
-  reductions(mass,te);
+  auto [mass, te] = reductions();
 
   if (mainproc) {
     fprintf(stderr, "d_mass: %le\n" , (mass - mass0)/mass0 );
@@ -864,9 +868,9 @@ void finalize() {
 
 
 //Compute reduced quantities for error checking without resorting to the "ncdiff" tool
-void reductions( double &mass , double &te ) {
-  mass = 0;
-  te   = 0;
+reduction_result reductions() {
+  reduction_result result{0.0, 0.0};
+
   for (int k=0; k<nz; k++) {
     for (int i=0; i<nx; i++) {
       int ind_r = ID_DENS*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
@@ -881,16 +885,18 @@ void reductions( double &mass , double &te ) {
       double t  = th / pow(p0/p,rd/cp);                            // Temperature
       double ke = r*(u*u+w*w);                                     // Kinetic Energy
       double ie = r*cv*t;                                          // Internal Energy
-      mass += r        *dx*dz; // Accumulate domain mass
-      te   += (ke + ie)*dx*dz; // Accumulate domain total energy
+      result.mass += r        *dx*dz; // Accumulate domain mass
+      result.te   += (ke + ie)*dx*dz; // Accumulate domain total energy
     }
   }
   double glob[2], loc[2];
-  loc[0] = mass;
-  loc[1] = te;
+  loc[0] = result.mass;
+  loc[1] = result.te;
   int ierr = MPI_Allreduce(loc,glob,2,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);
-  mass = glob[0];
-  te   = glob[1];
+  result.mass = glob[0];
+  result.te   = glob[1];
+
+  return result;
 }
 
 
