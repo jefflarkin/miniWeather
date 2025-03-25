@@ -73,28 +73,27 @@ double constexpr dz            = zlen / nz_glob; // grid spacing in the x-direct
 // END USER-CONFIGURABLE PARAMETERS
 ///////////////////////////////////////////////////////////////////////////////////////
 
-namespace md {
-  using MDSPAN_IMPL_STANDARD_NAMESPACE :: MDSPAN_IMPL_PROPOSED_NAMESPACE :: dims;
-} // namespace md
+// NUM_VARS is a compile-time constant, so we bake it into the extents type.
+using extents_3d =    md::extents<int, NUM_VARS, md::dynamic_extent, md::dynamic_extent>;
+using view_3d =       md::mdspan<double,       extents_3d, md::layout_right>;
+using view_3d_const = md::mdspan<const double, extents_3d, md::layout_right>;
+using extents_1d =    md::extents<int, md::dynamic_extent>; // a.k.a. dims<1, int>;
+using view_1d =       md::mdspan<double,       extents_1d, md::layout_right>;
+using view_1d_const = md::mdspan<const double, extents_1d, md::layout_right>;
 
-// FIXME use dims<NDIMS, int> (make_unique_mdarray constructor
-// that takes extents doesn't like that)
-using alloc_3d = md::unique_mdarray<double, md::dims<3>, md::layout_right>;
-using view_3d =       md::mdspan<double, md::dims<3>, md::layout_right>;
-using view_3d_const = md::mdspan<const double, md::dims<3>, md::layout_right>;
+// All dynamic array allocation happens here.
+// Deallocation other than through `delete [] ptr` would happen
+// through a custom Deleter (second template argument of `unique_ptr`).
+
+using alloc_3d = std::unique_ptr<double[]>;
+alloc_3d make_unique_array_3d(int X, int Y, int Z) {
+  return std::make_unique<double[]>(X * Y * Z);
+}
 
 using alloc_1d = std::unique_ptr<double[]>;
-using view_1d = md::mdspan<double, md::dims<1>, md::layout_right>;
-using view_1d_const = md::mdspan<const double, md::dims<1>, md::layout_right>;
-
-//Runtime variable arrays
-//
-// C indexing seems to prefer the extents in reverse order.
-// Respecting that also avoids divergence from the Python version.
-// This means that the mdspan must be layout_right; the intent appears
-// to be for C code to use row-major storage, but with Fortran ordering.
-//
-// state extents: NUM_VARS, (nz+2*hs), (nx+2*hs)
+alloc_1d make_unique_array_1d(int X) {
+  return std::make_unique<double[]>(X);
+}
 
 struct global_scalars {
   // Model time step (seconds).  The last time step might shorten this.
@@ -117,20 +116,21 @@ struct global_scalars {
   bool mainproc() const { return myrank == 0; } //Am I the main process (rank == 0)?
 };
 
-// Arrays that are allocated in init and never changed after that.
+// Arrays that are allocated and filled in init and never changed after that.
 class global_const_arrays {
 public:
   global_const_arrays(int nx, int nz, int hs) :
     nx_(nx),
     nz_(nz),
     hs_(hs),
-    hy_dens_cell_      (std::make_unique<double[]>(nz+2*hs)),
-    hy_dens_theta_cell_(std::make_unique<double[]>(nz+2*hs)),
-    hy_dens_int_       (std::make_unique<double[]>(nz+1)),
-    hy_dens_theta_int_ (std::make_unique<double[]>(nz+1)),
-    hy_pressure_int_   (std::make_unique<double[]>(nz+1))
+    hy_dens_cell_      (make_unique_array_1d(nz+2*hs)),
+    hy_dens_theta_cell_(make_unique_array_1d(nz+2*hs)),
+    hy_dens_int_       (make_unique_array_1d(nz+1)),
+    hy_dens_theta_int_ (make_unique_array_1d(nz+1)),
+    hy_pressure_int_   (make_unique_array_1d(nz+1))
   {}
 
+  // Const views exist for all use after init.
   view_1d_const hy_dens_cell() const {
     return view_1d_const{hy_dens_cell_.get(), nz_ + 2 * hs_};
   }
@@ -147,6 +147,7 @@ public:
     return view_1d_const{hy_pressure_int_.get(), nz_ + 1};
   }
 
+  // Nonconst views exist for init.
   view_1d hy_dens_cell() {
     return view_1d{hy_dens_cell_.get(), nz_ + 2 * hs_};
   }
@@ -165,53 +166,67 @@ public:
 
 private:
   int nx_, nz_, hs_;
-  std::unique_ptr<double[]> hy_dens_cell_;       //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
-  std::unique_ptr<double[]> hy_dens_theta_cell_; //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
-  std::unique_ptr<double[]> hy_dens_int_;        //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
-  std::unique_ptr<double[]> hy_dens_theta_int_;  //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
-  std::unique_ptr<double[]> hy_pressure_int_;    //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
+  alloc_1d hy_dens_cell_;       //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
+  alloc_1d hy_dens_theta_cell_; //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
+  alloc_1d hy_dens_int_;        //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
+  alloc_1d hy_dens_theta_int_;  //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
+  alloc_1d hy_pressure_int_;    //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
 };
 
 // Arrays that are allocated in init and updated throughout the simulation.
+//
+// C indexing seems to prefer the extents in reverse order.
+// Respecting that also avoids divergence from the Python version.
+// This means that the mdspan must be layout_right; the intent appears
+// to be for C code to use row-major storage, but with Fortran ordering.
 class global_arrays {
 public:
-  global_arrays(int nx, int nz) :
-    state_    (md::make_unique_mdarray<double>(NUM_VARS, nz+2*hs, nx+2*hs)),
-    state_tmp_(md::make_unique_mdarray<double>(NUM_VARS, nz+2*hs, nx+2*hs)),
-    flux_     (md::make_unique_mdarray<double>(NUM_VARS, nz+1, nx+1)),
-    tend_     (md::make_unique_mdarray<double>(NUM_VARS, nz, nx))
+  global_arrays(int nx, int nz, int hs) :
+    nx_(nx),
+    nz_(nz),
+    hs_(hs),
+    state_    (make_unique_array_3d(NUM_VARS, nz+2*hs, nx+2*hs)),
+    state_tmp_(make_unique_array_3d(NUM_VARS, nz+2*hs, nx+2*hs)),
+    flux_     (make_unique_array_3d(NUM_VARS, nz+1, nx+1)),
+    tend_     (make_unique_array_3d(NUM_VARS, nz, nx))
   {}
 
-  // The view member functions are const, but currently return nonconst views.
+  // The view member functions are nonconst and return mdspan-of-nonconst.
   // We might consider a different model where users declare access intent
   // (read-only, write-only, or read-write) at the point of use.
-  view_3d state() const {
-    // The various allocations have dimensions that depend on
+  view_3d state() {
+    // The various allocations have related dimensions that depend on
     // just a few metadata (NUM_VARS, nz, nx, and hs).
-    // Storing extents for each allocation duplicates storage of these metadata.
-    // Instead, we might consider flat allocations (e.g., make_unique<double[]>)
-    // and constructing layout mappings on the fly in these member functions.
-    return view_3d{state_};
+    // Storing extents for each allocation would duplicate metadata storage.
+    // Instead, we use flat allocations and construct layout mappings on the fly
+    // in the member functions that return (mdspan) views.
+    return view_3d{state_.get(), NUM_VARS, nz_ + 2 * hs_, nx_ + 2 * hs_};
   }
-  view_3d state_tmp() const {
-    return view_3d{state_tmp_};
+  view_3d state_tmp() {
+    return view_3d{state_tmp_.get(), NUM_VARS, nz_ + 2 * hs_, nx_ + 2 * hs_};
   }
-  view_3d flux() const {
-    return view_3d{flux_};
+  view_3d flux() {
+    return view_3d{flux_.get(), NUM_VARS, nz_ + 1, nx_ + 1};
   }
-  view_3d tend() const {
-    return view_3d{tend_};
+  view_3d tend() {
+    return view_3d{tend_.get(), NUM_VARS, nz_, nx_};
   }
 
 private:
+  int nx_, nz_, hs_;
   alloc_3d state_;     // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
   alloc_3d state_tmp_; // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
   alloc_3d flux_;      // Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
   alloc_3d tend_;      // Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
 };
 
-std::tuple<global_scalars, global_const_arrays, global_arrays>
-init(int *argc , char ***argv );
+struct init_result {
+  global_scalars scalars;
+  global_const_arrays const_arrays;
+  global_arrays arrays;
+};
+
+init_result init(int *argc , char ***argv);
 
 void finalize();
 
@@ -658,10 +673,7 @@ void set_halo_values_z(view_3d state,
   }
 }
 
-
-std::tuple<global_scalars, global_const_arrays, global_arrays>
-init( int *argc , char ***argv )
-{
+init_result init( int *argc , char ***argv ) {
   (void) MPI_Init(argc,argv);
 
   /////////////////////////////////////////////////////////////
@@ -694,7 +706,7 @@ init( int *argc , char ***argv )
   int right_rank = 0;
   bool mainproc = (myrank == 0);
 
-  global_arrays gl_arrs(nx, nz);
+  global_arrays gl_arrs(nx, nz, hs);
   auto state = gl_arrs.state();
   auto state_tmp = gl_arrs.state_tmp();
   auto flux = gl_arrs.flux();
@@ -773,7 +785,7 @@ init( int *argc , char ***argv )
     hy_pressure_int  [k] = C0 * pow(hr * ht, gamm);
   }
 
-  return std::tuple{
+  return init_result{
     global_scalars{
 #if defined(__cpp_designated_initializers)
       .dt = dt,
