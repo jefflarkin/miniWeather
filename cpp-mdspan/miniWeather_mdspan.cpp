@@ -44,8 +44,9 @@ constexpr int ID_DENS  = 0;           //index for density ("rho")
 constexpr int ID_UMOM  = 1;           //index for momentum in the x-direction ("rho * u")
 constexpr int ID_WMOM  = 2;           //index for momentum in the z-direction ("rho * w")
 constexpr int ID_RHOT  = 3;           //index for density * potential temperature ("rho * theta")
-constexpr int DIR_X = 1;              //Integer constant to express that this operation is in the x-direction
-constexpr int DIR_Z = 2;              //Integer constant to express that this operation is in the z-direction
+
+enum class direction { X, Z };
+
 constexpr int DATA_SPEC_COLLISION       = 1;
 constexpr int DATA_SPEC_THERMAL         = 2;
 constexpr int DATA_SPEC_GRAVITY_WAVES   = 3;
@@ -76,17 +77,6 @@ double constexpr dz            = zlen / nz_glob; // grid spacing in the x-direct
 ///////////////////////////////////////////////////////////////////////////////////////
 // Variables that are initialized but remain static over the course of the simulation
 ///////////////////////////////////////////////////////////////////////////////////////
-double dt;                    //Model time step (seconds)
-int    nx, nz;                //Number of local grid cells in the x- and z- dimensions for this MPI task
-int    i_beg, k_beg;          //beginning index in the x- and z-directions for this MPI task
-int    nranks, myrank;        //Number of MPI ranks and my rank id
-int    left_rank, right_rank; //MPI Rank IDs that exist to my left and right in the global domain
-int    mainproc;            //Am I the main process (rank == 0)?
-std::unique_ptr<double[]> hy_dens_cell;         //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
-std::unique_ptr<double[]> hy_dens_theta_cell;   //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
-std::unique_ptr<double[]> hy_dens_int;          //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
-std::unique_ptr<double[]> hy_dens_theta_int;    //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
-std::unique_ptr<double[]> hy_pressure_int;      //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
 
 ///////////////////////////////////////////////////////////////////////////////////////
 // Variables that are dynamics over the course of the simulation
@@ -108,16 +98,46 @@ using view_3d = md::mdspan<double, md::dims<3>, md::layout_right>;
 // to be for C code to use row-major storage, but with Fortran ordering.
 //
 // state extents: NUM_VARS, (nz+2*hs), (nx+2*hs)
-//
-alloc_3d state;     // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
-alloc_3d state_tmp; // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
-alloc_3d flux;      // Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
-alloc_3d tend;      // Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
+
+struct global_scalars {
+  // Model time step (seconds).  The last time step might shorten this.
+  double dt;
+
+  // Variables and arrays that are set once in init and remain read-only throughout the simulation.
+
+  int nx = nx_glob;
+  int nz = nz_glob; //Number of local grid cells in the x- and z- dimensions for this MPI task
+  int i_beg = 0;
+  int k_beg = 0;       //beginning index in the x- and z-directions for this MPI task
+
+  int nranks = 1;
+  int myrank = 0;        //Number of MPI ranks and my rank id
+  int left_rank = 0;
+  int right_rank = 0; //MPI Rank IDs that exist to my left and right in the global domain
+
+  bool mainproc() const { return myrank == 0; } //Am I the main process (rank == 0)?
+};
+
+struct global_arrays {
+  std::unique_ptr<double[]> hy_dens_cell;         //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
+  std::unique_ptr<double[]> hy_dens_theta_cell;   //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
+  std::unique_ptr<double[]> hy_dens_int;          //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
+  std::unique_ptr<double[]> hy_dens_theta_int;    //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
+  std::unique_ptr<double[]> hy_pressure_int;      //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
+
+  // Arrays that are allocated in init and updated throughout the simulation.
+
+  alloc_3d state;     // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
+  alloc_3d state_tmp; // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
+  alloc_3d flux;      // Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
+  alloc_3d tend;      // Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
+};
+
 int    num_out = 0; // The number of outputs performed so far
 int    direction_switch = 1;
 
 //Declaring the functions defined after "main"
-void init(int *argc , char ***argv );
+std::tuple<global_scalars, global_arrays> init(int *argc , char ***argv );
 void finalize();
 
 struct test_case {
@@ -155,22 +175,31 @@ r_t_pair hydro_const_bvfreq(double z, double bv_freq0);
 double sample_ellipse_cosine(double x, double z, double amp, double x0, double z0,
                              double xrad, double zrad);
 
-void output(view_3d state, double etime);
+void output(const global_scalars& scalars, const global_arrays& arrays, double etime);
 void ncwrap(int ierr, int line);
 void perform_timestep(view_3d state, view_3d state_tmp,
-                      view_3d flux, view_3d tend, double dt);
+                      view_3d flux, view_3d tend,
+                      const global_scalars& scalars,
+                      const global_arrays& arrays);
 void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state_out,
-                        double dt, int dir, view_3d flux, view_3d tend);
-void compute_tendencies_x(view_3d state, view_3d flux, view_3d tend, double dt);
-void compute_tendencies_z(view_3d state, view_3d flux, view_3d tend, double dt);
-void set_halo_values_x(view_3d state);
-void set_halo_values_z(view_3d state);
+                        double dt /* not scalars.dt */,
+                        direction dir, view_3d flux, view_3d tend,
+                        const global_scalars& scalars,
+                        const global_arrays& arrays);
+void compute_tendencies_x(view_3d state, view_3d flux, view_3d tend,
+  double dt, int nx, int nz, const global_arrays& arrays);
+void compute_tendencies_z(view_3d state, view_3d flux, view_3d tend,
+  double dt, int nx, int nz, const global_arrays& arrays);
+void set_halo_values_x(view_3d state,
+  const global_scalars& scalars, const global_arrays& arrays);
+void set_halo_values_z(view_3d state,
+  const global_scalars& scalars, const global_arrays& arrays);
 
 struct reduction_result {
   double mass;
   double te;
 };
-reduction_result reductions();
+reduction_result reductions(const global_scalars& scalars, const global_arrays& arrays);
 
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -178,24 +207,28 @@ reduction_result reductions();
 ///////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
 
-  init( &argc , &argv );
+  auto [scalars, arrays] = init( &argc , &argv );
 
   //Initial reductions for mass, kinetic energy, and total energy.
   //
   // mass0: initial domain total for mass
   // te0:   initial domain total for total energy
-  auto [mass0, te0] = reductions();
+  auto [mass0, te0] = reductions(scalars, arrays);
   {
     fprintf(stderr, "mass0: %le\n" , mass0);
     fprintf(stderr, "te0:   %le\n" , te0  );
   }
-  auto state_view = view_3d(state.get(), NUM_VARS, nz+2*hs, nx+2*hs);
-  auto state_tmp_view = view_3d(state_tmp.get(), NUM_VARS, nz+2*hs, nx+2*hs);
-  auto flux_view = view_3d(flux.get(), NUM_VARS, nz+1, nx+1);
-  auto tend_view = view_3d(tend.get(), NUM_VARS, nz, nx);
+  auto state_view = view_3d(arrays.state.get(),
+    NUM_VARS, scalars.nz + 2 * hs, scalars.nx + 2 * hs);
+  auto state_tmp_view = view_3d(arrays.state_tmp.get(),
+    NUM_VARS, scalars.nz + 2 * hs, scalars.nx + 2 * hs);
+  auto flux_view = view_3d(arrays.flux.get(),
+    NUM_VARS, scalars.nz + 1, scalars.nx + 1);
+  auto tend_view = view_3d(arrays.tend.get(),
+    NUM_VARS, scalars.nz, scalars.nx);
 
   //Output the initial state
-  output(state_view, etime);
+  output(scalars, arrays, etime);
 
   ////////////////////////////////////////////////////
   // MAIN TIME STEP LOOP
@@ -203,35 +236,35 @@ int main(int argc, char **argv) {
   auto t1 = std::chrono::steady_clock::now();
   while (etime < sim_time) {
     //If the time step leads to exceeding the simulation time, shorten it for the last step
-    if (etime + dt > sim_time) {
-      dt = sim_time - etime;
+    if (etime + scalars.dt > sim_time) {
+      scalars.dt = sim_time - etime;
     }
     //Perform a single time step
-    perform_timestep(state_view, state_tmp_view, flux_view, tend_view, dt);
+    perform_timestep(state_view, state_tmp_view, flux_view, tend_view, scalars, arrays);
     //Inform the user
 #if ! defined(NO_INFORM)
-    if (mainproc) {
+    if (scalars.mainproc()) {
       fprintf(stderr, "Elapsed Time: %lf / %lf\n", etime, sim_time);
     }
 #endif
     //Update the elapsed time and output counter
-    etime = etime + dt;
-    output_counter = output_counter + dt;
+    etime = etime + scalars.dt;
+    output_counter = output_counter + scalars.dt;
     //If it's time for output, reset the counter, and do output
     if (output_counter >= output_freq) {
       output_counter = output_counter - output_freq;
-      output(state_view, etime);
+      output(scalars, arrays, etime);
     }
   }
   auto t2 = std::chrono::steady_clock::now();
-  if (mainproc) {
+  if (scalars.mainproc()) {
     std::cerr << "CPU Time: " << std::chrono::duration<double>(t2-t1).count() << " sec\n";
   }
 
   //Final reductions for mass, kinetic energy, and total energy
-  auto [mass, te] = reductions();
+  auto [mass, te] = reductions(scalars, arrays);
 
-  if (mainproc) {
+  if (scalars.mainproc()) {
     fprintf(stderr, "d_mass: %le\n" , (mass - mass0)/mass0 );
     fprintf(stderr, "d_te:   %le\n" , (te   - te0  )/te0   );
   }
@@ -247,26 +280,30 @@ int main(int argc, char **argv) {
 // q*     = q[n] + dt/3 * rhs(q[n])
 // q**    = q[n] + dt/2 * rhs(q*  )
 // q[n+1] = q[n] + dt/1 * rhs(q** )
-void perform_timestep(view_3d state, view_3d state_tmp, view_3d flux, view_3d tend, double dt)
+void perform_timestep(view_3d state, view_3d state_tmp,
+                      view_3d flux, view_3d tend,
+                      const global_scalars& scalars,
+                      const global_arrays& arrays)
 {
+  const double dt = scalars.dt;
   if (direction_switch) {
     //x-direction first
-    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, flux, tend);
-    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, flux, tend);
-    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_X, flux, tend);
+    semi_discrete_step(state, state    , state_tmp, dt / 3, direction::X, flux, tend, scalars, arrays);
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, direction::X, flux, tend, scalars, arrays);
+    semi_discrete_step(state, state_tmp, state    , dt / 1, direction::X, flux, tend, scalars, arrays);
     //z-direction second
-    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_Z, flux, tend);
-    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_Z, flux, tend);
-    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_Z, flux, tend);
+    semi_discrete_step(state, state    , state_tmp, dt / 3, direction::Z, flux, tend, scalars, arrays);
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, direction::Z, flux, tend, scalars, arrays);
+    semi_discrete_step(state, state_tmp, state    , dt / 1, direction::Z, flux, tend, scalars, arrays);
   } else {
     //z-direction second
-    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_Z, flux, tend);
-    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_Z, flux, tend);
-    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_Z, flux, tend);
+    semi_discrete_step(state, state    , state_tmp, dt / 3, direction::Z, flux, tend, scalars, arrays);
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, direction::Z, flux, tend, scalars, arrays);
+    semi_discrete_step(state, state_tmp, state    , dt / 1, direction::Z, flux, tend, scalars, arrays);
     //x-direction first
-    semi_discrete_step(state, state    , state_tmp, dt / 3, DIR_X, flux, tend);
-    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, DIR_X, flux, tend);
-    semi_discrete_step(state, state_tmp, state    , dt / 1, DIR_X, flux, tend);
+    semi_discrete_step(state, state    , state_tmp, dt / 3, direction::X, flux, tend, scalars, arrays);
+    semi_discrete_step(state, state_tmp, state_tmp, dt / 2, direction::X, flux, tend, scalars, arrays);
+    semi_discrete_step(state, state_tmp, state    , dt / 1, direction::X, flux, tend, scalars, arrays);
   }
   if (direction_switch) { direction_switch = 0; } else { direction_switch = 1; }
 }
@@ -277,24 +314,32 @@ void perform_timestep(view_3d state, view_3d state_tmp, view_3d flux, view_3d te
 //Meaning the step starts from state_init, computes the rhs using state_forcing,
 //and stores the result in state_out
 void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state_out,
-  double dt, int dir, view_3d flux, view_3d tend)
+                        double dt /* not scalars.dt */,
+                        direction dir, view_3d flux, view_3d tend,
+                        const global_scalars& scalars,
+                        const global_arrays& arrays)
 {
-  if (dir == DIR_X) {
+  const int nx = scalars.nx;
+  const int nz = scalars.nz;
+
+  if (dir == direction::X) {
     //Set the halo values for this MPI task's fluid state in the x-direction
-    set_halo_values_x(state_forcing);
+    set_halo_values_x(state_forcing, scalars, arrays);
     //Compute the time tendencies for the fluid state in the x-direction
-    compute_tendencies_x(state_forcing, flux, tend, dt);
-  } else if (dir == DIR_Z) {
+    compute_tendencies_x(state_forcing, flux, tend, dt, nx, nz, arrays);
+  } else if (dir == direction::Z) {
     //Set the halo values for this MPI task's fluid state in the z-direction
-    set_halo_values_z(state_forcing);
+    set_halo_values_z(state_forcing, scalars, arrays);
     //Compute the time tendencies for the fluid state in the z-direction
-    compute_tendencies_z(state_forcing, flux, tend, dt);
+    compute_tendencies_z(state_forcing, flux, tend, dt, nx, nz, arrays);
   }
 
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Apply the tendencies to the fluid state
+  const int i_beg = scalars.i_beg;
+  const int k_beg = scalars.k_beg;
   for (int ll = 0; ll < NUM_VARS; ++ll) {
     for (int k = 0; k < nz; ++k) {
       for (int i = 0; i < nx; ++i) {
@@ -302,7 +347,7 @@ void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state
           const double x = (i_beg + i+0.5)*dx;
           const double z = (k_beg + k+0.5)*dz;
           const double wpert = sample_ellipse_cosine(x, z, 0.01, xlen/8, 1000.0, 500.0, 500.0);
-          tend(ID_WMOM, k, i) += wpert*hy_dens_cell[hs+k];
+          tend(ID_WMOM, k, i) += wpert * arrays.hy_dens_cell[hs+k];
         }
         state_out(ll, k+hs, i+hs) = state_init(ll, k+hs, i+hs) + dt * tend(ll, k, i);
       }
@@ -315,7 +360,9 @@ void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-void compute_tendencies_x(view_3d state, view_3d flux, view_3d tend, double dt) {
+void compute_tendencies_x(view_3d state, view_3d flux, view_3d tend,
+  double dt, int nx, int nz, const global_arrays& arrays)
+{
   double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS], hv_coef;
   //Compute the hyperviscosity coefficient
   hv_coef = -hv_beta * dx / (16*dt);
@@ -337,10 +384,10 @@ void compute_tendencies_x(view_3d state, view_3d flux, view_3d tend, double dt) 
       }
 
       //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-      double r = vals[ID_DENS] + hy_dens_cell[k+hs];
+      double r = vals[ID_DENS] + arrays.hy_dens_cell[k+hs];
       double u = vals[ID_UMOM] / r;
       double w = vals[ID_WMOM] / r;
-      double t = ( vals[ID_RHOT] + hy_dens_theta_cell[k+hs] ) / r;
+      double t = ( vals[ID_RHOT] + arrays.hy_dens_theta_cell[k+hs] ) / r;
       double p = C0 * pow(r*t, gamm);
 
       //Compute the flux vector
@@ -369,7 +416,9 @@ void compute_tendencies_x(view_3d state, view_3d flux, view_3d tend, double dt) 
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-void compute_tendencies_z(view_3d state, view_3d flux, view_3d tend, double dt) {
+void compute_tendencies_z(view_3d state, view_3d flux, view_3d tend,
+  double dt, int nx, int nz, const global_arrays& arrays)
+{
   double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS];
   //Compute the hyperviscosity coefficient
   const double hv_coef = -hv_beta * dz / (16*dt);
@@ -391,11 +440,11 @@ void compute_tendencies_z(view_3d state, view_3d flux, view_3d tend, double dt) 
       }
 
       //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-      double r = vals[ID_DENS] + hy_dens_int[k];
+      double r = vals[ID_DENS] + arrays.hy_dens_int[k];
       double u = vals[ID_UMOM] / r;
       double w = vals[ID_WMOM] / r;
-      double t = (vals[ID_RHOT] + hy_dens_theta_int[k]) / r;
-      double p = C0 * pow(r * t, gamm) - hy_pressure_int[k];
+      double t = (vals[ID_RHOT] + arrays.hy_dens_theta_int[k]) / r;
+      double p = C0 * pow(r * t, gamm) - arrays.hy_pressure_int[k];
       //Enforce vertical boundary condition and exact mass conservation
       if (k == 0 || k == nz) {
         w                = 0;
@@ -429,7 +478,12 @@ void compute_tendencies_z(view_3d state, view_3d flux, view_3d tend, double dt) 
 
 
 //Set this MPI task's halo values in the x-direction. This routine will require MPI
-void set_halo_values_x(view_3d state) {
+void set_halo_values_x(view_3d state,
+  const global_scalars& scalars, const global_arrays& arrays)
+{
+  const int nx = scalars.nx;
+  const int nz = scalars.nz;
+
   ////////////////////////////////////////////////////////////////////////
   // TODO: EXCHANGE HALO VALUES WITH NEIGHBORING MPI TASKS
   // (1) give    state(1:hs,1:nz,1:NUM_VARS)       to   my left  neighbor
@@ -452,13 +506,15 @@ void set_halo_values_x(view_3d state) {
   ////////////////////////////////////////////////////
 
   if (data_spec_int == DATA_SPEC_INJECTION) {
-    if (myrank == 0) {
+    if (scalars.myrank == 0) {
+      const int k_beg = scalars.k_beg;
       for (int k = 0; k < nz; ++k) {
         for (int i = 0; i < hs; ++i) {
           const double z = (k_beg + k+0.5)*dz;
           if (fabs(z-3*zlen/4) <= zlen/16) {
-            state(ID_UMOM, k+hs, i) = (state(ID_DENS, k+hs, i)+hy_dens_cell[k+hs]) * 50.;
-            state(ID_RHOT, k+hs, i) = (state(ID_DENS, k+hs, i)+hy_dens_cell[k+hs]) * 298. - hy_dens_theta_cell[k+hs];
+            state(ID_UMOM, k+hs, i) = (state(ID_DENS, k+hs, i) + arrays.hy_dens_cell[k+hs]) * 50.0;
+            state(ID_RHOT, k+hs, i) = (state(ID_DENS, k+hs, i) + arrays.hy_dens_cell[k+hs]) * 298.0 -
+              arrays.hy_dens_theta_cell[k+hs];
           }
         }
       }
@@ -469,7 +525,11 @@ void set_halo_values_x(view_3d state) {
 
 //Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
 //decomposition in the vertical direction
-void set_halo_values_z(view_3d state) {
+void set_halo_values_z(view_3d state,
+  const global_scalars& scalars, const global_arrays& arrays)
+{
+  const int nx = scalars.nx;
+  const int nz = scalars.nz;
 
   /////////////////////////////////////////////////
   // TODO: THREAD ME
@@ -482,10 +542,10 @@ void set_halo_values_z(view_3d state) {
         state(ll, nz+hs, i) = 0.;
         state(ll, nz+hs+1, i) = 0.;
       } else if (ll == ID_UMOM) {
-        state(ll, 0, i) = state(ll, hs, i) / hy_dens_cell[hs] * hy_dens_cell[0];
-        state(ll, 1, i) = state(ll, hs, i) / hy_dens_cell[hs] * hy_dens_cell[1];
-        state(ll, nz+hs, i) = state(ll, nz+hs-1, i) / hy_dens_cell[nz+hs-1] * hy_dens_cell[nz+hs];
-        state(ll, nz+hs+1, i) = state(ll, nz+hs-1, i) / hy_dens_cell[nz+hs-1] * hy_dens_cell[nz+hs+1];
+        state(ll, 0, i) = state(ll, hs, i) / arrays.hy_dens_cell[hs] * arrays.hy_dens_cell[0];
+        state(ll, 1, i) = state(ll, hs, i) / arrays.hy_dens_cell[hs] * arrays.hy_dens_cell[1];
+        state(ll, nz+hs, i) = state(ll, nz+hs-1, i) / arrays.hy_dens_cell[nz+hs-1] * arrays.hy_dens_cell[nz+hs];
+        state(ll, nz+hs+1, i) = state(ll, nz+hs-1, i) / arrays.hy_dens_cell[nz+hs-1] * arrays.hy_dens_cell[nz+hs+1];
       } else {
         state(ll, 0, i) = state(ll, hs, i);
         state(ll, 1, i) = state(ll, hs, i);
@@ -497,7 +557,7 @@ void set_halo_values_z(view_3d state) {
 }
 
 
-void init( int *argc , char ***argv ) {
+std::tuple<global_scalars, global_arrays> init( int *argc , char ***argv ) {
   (void) MPI_Init(argc,argv);
 
   /////////////////////////////////////////////////////////////
@@ -508,16 +568,12 @@ void init( int *argc , char ***argv ) {
   //       (4) COMPUTE HOW MANY X-DIRECTION CELLS MY RANK HAS
   //       (5) FIND MY LEFT AND RIGHT NEIGHBORING RANK IDs
   /////////////////////////////////////////////////////////////
-  nranks = 1;
-  myrank = 0;
-  i_beg = 0;
-  nx = nx_glob;
-  left_rank = 0;
-  right_rank = 0;
+  int i_beg = 0;
+  int nx = nx_glob;
+
   //////////////////////////////////////////////
   // END MPI DUMMY SECTION
   //////////////////////////////////////////////
-
 
   ////////////////////////////////////////////////////////////////////////////////
   ////////////////////////////////////////////////////////////////////////////////
@@ -526,23 +582,27 @@ void init( int *argc , char ***argv ) {
   ////////////////////////////////////////////////////////////////////////////////
 
   //Vertical direction isn't MPI-ized, so the rank's local values = the global values
-  k_beg = 0;
-  nz = nz_glob;
-  mainproc = (myrank == 0);
+  int k_beg = 0;
+  int nz = nz_glob;
+  int nranks = 1;
+  int myrank = 0;
+  int left_rank = 0;
+  int right_rank = 0;
+  bool mainproc = (myrank == 0);
 
   //Allocate the model data
-  state              = md::make_unique_mdarray<double>(NUM_VARS, nz+2*hs, nx+2*hs);
-  state_tmp          = md::make_unique_mdarray<double>(NUM_VARS, nz+2*hs, nx+2*hs);
-  flux               = md::make_unique_mdarray<double>(NUM_VARS, nz+1, nx+1);
-  tend               = md::make_unique_mdarray<double>(NUM_VARS, nz, nx);
-  hy_dens_cell       = std::make_unique<double[]>(nz+2*hs);
-  hy_dens_theta_cell = std::make_unique<double[]>(nz+2*hs);
-  hy_dens_int        = std::make_unique<double[]>(nz+1);
-  hy_dens_theta_int  = std::make_unique<double[]>(nz+1);
-  hy_pressure_int    = std::make_unique<double[]>(nz+1);
+  auto state              = md::make_unique_mdarray<double>(NUM_VARS, nz+2*hs, nx+2*hs);
+  auto state_tmp          = md::make_unique_mdarray<double>(NUM_VARS, nz+2*hs, nx+2*hs);
+  auto flux               = md::make_unique_mdarray<double>(NUM_VARS, nz+1, nx+1);
+  auto tend               = md::make_unique_mdarray<double>(NUM_VARS, nz, nx);
+  auto hy_dens_cell       = std::make_unique<double[]>(nz+2*hs);
+  auto hy_dens_theta_cell = std::make_unique<double[]>(nz+2*hs);
+  auto hy_dens_int        = std::make_unique<double[]>(nz+1);
+  auto hy_dens_theta_int  = std::make_unique<double[]>(nz+1);
+  auto hy_pressure_int    = std::make_unique<double[]>(nz+1);
 
   //Define the maximum stable time step based on an assumed maximum wind speed
-  dt = fmin(dx,dz) / max_speed * cfl;
+  double dt = fmin(dx,dz) / max_speed * cfl;
   //Set initial elapsed model time and output_counter to zero
   etime = 0.0;
   output_counter = 0.0;
@@ -589,13 +649,13 @@ void init( int *argc , char ***argv ) {
   }
   //Compute the hydrostatic background state over vertical cell averages
   for (int k = 0; k < nz+2*hs; ++k) {
-    hy_dens_cell      [k] = 0.;
+    hy_dens_cell[k] = 0.;
     hy_dens_theta_cell[k] = 0.;
     for (int kk = 0; kk < nqpoints; ++kk) {
       const double z = (k_beg + k-hs+0.5)*dz;
       //Set the fluid state based on the user's specification
       auto [r, u, w, t, hr, ht] = get_test_case(data_spec_int, 0.0, z);
-      hy_dens_cell      [k] = hy_dens_cell      [k] + hr    * qweights[kk];
+      hy_dens_cell[k]       = hy_dens_cell[k]       + hr    * qweights[kk];
       hy_dens_theta_cell[k] = hy_dens_theta_cell[k] + hr*ht * qweights[kk];
     }
   }
@@ -607,6 +667,56 @@ void init( int *argc , char ***argv ) {
     hy_dens_theta_int[k] = hr * ht;
     hy_pressure_int  [k] = C0 * pow(hr * ht, gamm);
   }
+
+  return std::tuple{
+#if defined(__cpp_designated_initializers)
+    global_scalars{
+      .dt = dt,
+      .nx = nx,
+      .nz = nz,
+      .i_beg = i_beg,
+      .k_beg = k_beg,
+      .nranks = nranks,
+      .myrank = myrank,
+      .left_rank = left_rank,
+      .right_rank = right_rank
+    },
+    global_arrays{
+      .hy_dens_cell = std::move(hy_dens_cell),
+      .hy_dens_theta_cell = std::move(hy_dens_theta_cell),
+      .hy_dens_int = std::move(hy_dens_int),
+      .hy_dens_theta_int = std::move(hy_dens_theta_int),
+      .hy_pressure_int = std::move(hy_pressure_int),
+      .state = std::move(state),
+      .state_tmp = std::move(state_tmp),
+      .flux = std::move(flux),
+      .tend = std::move(tend)
+    }
+#else
+    global_scalars{
+      dt,
+      nx,
+      nz,
+      i_beg,
+      k_beg,
+      nranks,
+      myrank,
+      left_rank,
+      right_rank
+    },
+    global_arrays{
+      std::move(hy_dens_cell),
+      std::move(hy_dens_theta_cell),
+      std::move(hy_dens_int),
+      std::move(hy_dens_theta_int),
+      std::move(hy_pressure_int),
+      std::move(state),
+      std::move(state_tmp),
+      std::move(flux),
+      std::move(tend)
+    }
+#endif
+  };
 }
 
 
@@ -736,7 +846,7 @@ double sample_ellipse_cosine( double x , double z , double amp , double x0 , dou
 //Output the fluid state (state) to a NetCDF file at a given elapsed model time (etime)
 //The file I/O uses parallel-netcdf, the only external library required for this mini-app.
 //If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
-void output(view_3d state, double etime) {
+void output(const global_scalars& scalars, const global_arrays& arrays, double etime) {
 
   int ncid, t_dimid, x_dimid, z_dimid, theta_varid, t_varid, dimids[3];
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
@@ -745,15 +855,15 @@ void output(view_3d state, double etime) {
   MPI_Offset st1[1], ct1[1], st3[3], ct3[3];
 
   //Inform the user
-  if (mainproc) { fprintf(stderr, "*** OUTPUT ***\n"); }
+  if (scalars.mainproc()) { fprintf(stderr, "*** OUTPUT ***\n"); }
 
   //Temporary arrays to hold density, u-wind, w-wind, and potential temperature (theta).
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
-  auto dens     = md::make_unique_mdarray<double>(nz, nx);
-  auto uwnd     = md::make_unique_mdarray<double>(nz, nx);
-  auto wwnd     = md::make_unique_mdarray<double>(nz, nx);
+  auto dens     = md::make_unique_mdarray<double>(scalars.nz, scalars.nx);
+  auto uwnd     = md::make_unique_mdarray<double>(scalars.nz, scalars.nx);
+  auto wwnd     = md::make_unique_mdarray<double>(scalars.nz, scalars.nx);
 #endif
-  auto theta    = md::make_unique_mdarray<double>(nz, nx);
+  auto theta    = md::make_unique_mdarray<double>(scalars.nz, scalars.nx);
   auto etimearr = std::make_unique<double[]>(1);
 
   // PNetCDF needs an MPI_Info object that is not MPI_INFO_NULL.
@@ -799,20 +909,22 @@ void output(view_3d state, double etime) {
   }
 
   //Store perturbed values in the temp arrays for output
-  for (int k = 0; k < nz; ++k) {
-    for (int i = 0; i < nx; ++i) {
+  for (int k = 0; k < scalars.nz; ++k) {
+    for (int i = 0; i < scalars.nx; ++i) {
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
-      dens(k, i) = state(ID_DENS, k+hs, i+hs);
-      uwnd(k, i) = state(ID_UMOM, k+hs, i+hs) / ( hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs) );
-      wwnd(k, i) = state(ID_WMOM, k+hs, i+hs) / ( hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs) );
+      dens(k, i) = arrays.state(ID_DENS, k+hs, i+hs);
+      uwnd(k, i) = arrays.state(ID_UMOM, k+hs, i+hs) / (arrays.hy_dens_cell[k+hs] + arrays.state(ID_DENS, k+hs, i+hs));
+      wwnd(k, i) = arrays.state(ID_WMOM, k+hs, i+hs) / (arrays.hy_dens_cell[k+hs] + arrays.state(ID_DENS, k+hs, i+hs));
 #endif      
-      theta(k, i) = ( state(ID_RHOT, k+hs, i+hs) + hy_dens_theta_cell[k+hs] ) / ( hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs) ) - hy_dens_theta_cell[k+hs] / hy_dens_cell[k+hs];
+      theta(k, i) = (arrays.state(ID_RHOT, k+hs, i+hs) + arrays.hy_dens_theta_cell[k+hs]) /
+                    (arrays.hy_dens_cell[k+hs] + arrays.state(ID_DENS, k+hs, i+hs)) -
+                    arrays.hy_dens_theta_cell[k+hs] / arrays.hy_dens_cell[k+hs];
     }
   }
 
   //Write the grid data to file with all the processes writing collectively
-  st3[0] = num_out; st3[1] = k_beg; st3[2] = i_beg;
-  ct3[0] = 1      ; ct3[1] = nz   ; ct3[2] = nx   ;
+  st3[0] = num_out; st3[1] = scalars.k_beg; st3[2] = scalars.i_beg;
+  ct3[0] = 1      ; ct3[1] = scalars.nz   ; ct3[2] = scalars.nx   ;
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)      
   ncwrap( ncmpi_put_vara_double_all( ncid ,  dens_varid , st3 , ct3 , dens.get()  ) , __LINE__ );
   ncwrap( ncmpi_put_vara_double_all( ncid ,  uwnd_varid , st3 , ct3 , uwnd.get()  ) , __LINE__ );
@@ -824,7 +936,7 @@ void output(view_3d state, double etime) {
   //Begin "independent" write mode
   ncwrap( ncmpi_begin_indep_data(ncid) , __LINE__ );
   //write elapsed time to file
-  if (mainproc) {
+  if (scalars.mainproc()) {
     st1[0] = num_out;
     ct1[0] = 1;
     etimearr[0] = etime;
@@ -859,15 +971,18 @@ void finalize() {
 
 
 //Compute reduced quantities for error checking without resorting to the "ncdiff" tool
-reduction_result reductions() {
+reduction_result reductions(const global_scalars& scalars, const global_arrays& arrays) {
   reduction_result result{0.0, 0.0};
 
-  for (int k=0; k<nz; k++) {
-    for (int i=0; i<nx; i++) {
-      double r  =   state(ID_DENS, k+hs, i+hs) + hy_dens_cell[hs+k];             // Density
-      double u  =   state(ID_UMOM, k+hs, i+hs) / r;                              // U-wind
-      double w  =   state(ID_WMOM, k+hs, i+hs) / r;                              // W-wind
-      double th = ( state(ID_RHOT, k+hs, i+hs) + hy_dens_theta_cell[hs+k] ) / r; // Potential Temperature (theta)
+  const int nx = scalars.nx;
+  const int nz = scalars.nz;
+
+  for (int k = 0; k < nz; ++k) {
+    for (int i = 0; i < nx; ++i) {
+      double r  =   arrays.state(ID_DENS, k+hs, i+hs) + arrays.hy_dens_cell[hs+k];             // Density
+      double u  =   arrays.state(ID_UMOM, k+hs, i+hs) / r;                              // U-wind
+      double w  =   arrays.state(ID_WMOM, k+hs, i+hs) / r;                              // W-wind
+      double th = ( arrays.state(ID_RHOT, k+hs, i+hs) + arrays.hy_dens_theta_cell[hs+k] ) / r; // Potential Temperature (theta)
       double p  = C0 * pow(r * th, gamm);                          // Pressure
       double t  = th / pow(p0 / p, rd / cp);                       // Temperature
       double ke = r*(u*u+w*w);                                     // Kinetic Energy
