@@ -74,16 +74,6 @@ double constexpr dz            = zlen / nz_glob; // grid spacing in the x-direct
 // END USER-CONFIGURABLE PARAMETERS
 ///////////////////////////////////////////////////////////////////////////////////////
 
-///////////////////////////////////////////////////////////////////////////////////////
-// Variables that are initialized but remain static over the course of the simulation
-///////////////////////////////////////////////////////////////////////////////////////
-
-///////////////////////////////////////////////////////////////////////////////////////
-// Variables that are dynamics over the course of the simulation
-///////////////////////////////////////////////////////////////////////////////////////
-double etime;                 //Elapsed model time
-double output_counter;        //Helps determine when it's time to do output
-
 namespace md {
   using MDSPAN_IMPL_STANDARD_NAMESPACE :: MDSPAN_IMPL_PROPOSED_NAMESPACE :: dims;
 } // namespace md
@@ -102,6 +92,8 @@ using view_3d = md::mdspan<double, md::dims<3>, md::layout_right>;
 struct global_scalars {
   // Model time step (seconds).  The last time step might shorten this.
   double dt;
+  double etime = 0.0;          //Elapsed model time
+  double output_counter = 0.0; //Helps determine when it's time to do output
 
   // Variables and arrays that are set once in init and remain read-only throughout the simulation.
 
@@ -233,16 +225,16 @@ int main(int argc, char **argv) {
   }
 
   //Output the initial state
-  num_out = output(state_view, scalars, const_arrays, etime, num_out);
+  num_out = output(state_view, scalars, const_arrays, scalars.etime, num_out);
 
   ////////////////////////////////////////////////////
   // MAIN TIME STEP LOOP
   ////////////////////////////////////////////////////
   auto t1 = std::chrono::steady_clock::now();
-  while (etime < sim_time) {
+  while (scalars.etime < sim_time) {
     //If the time step leads to exceeding the simulation time, shorten it for the last step
-    if (etime + scalars.dt > sim_time) {
-      scalars.dt = sim_time - etime;
+    if (scalars.etime + scalars.dt > sim_time) {
+      scalars.dt = sim_time - scalars.etime;
     }
     //Perform a single time step
     direction_switch = perform_timestep(state_view, state_tmp_view, flux_view, tend_view,
@@ -250,16 +242,16 @@ int main(int argc, char **argv) {
     //Inform the user
 #if ! defined(NO_INFORM)
     if (scalars.mainproc()) {
-      fprintf(stderr, "Elapsed Time: %lf / %lf\n", etime, sim_time);
+      fprintf(stderr, "Elapsed Time: %lf / %lf\n", scalars.etime, sim_time);
     }
 #endif
     //Update the elapsed time and output counter
-    etime = etime + scalars.dt;
-    output_counter = output_counter + scalars.dt;
+    scalars.etime = scalars.etime + scalars.dt;
+    scalars.output_counter = scalars.output_counter + scalars.dt;
     //If it's time for output, reset the counter, and do output
-    if (output_counter >= output_freq) {
-      output_counter = output_counter - output_freq;
-      num_out = output(state_view, scalars, const_arrays, etime, num_out);
+    if (scalars.output_counter >= output_freq) {
+      scalars.output_counter = scalars.output_counter - output_freq;
+      num_out = output(state_view, scalars, const_arrays, scalars.etime, num_out);
     }
   }
   auto t2 = std::chrono::steady_clock::now();
@@ -614,9 +606,6 @@ std::tuple<global_scalars, global_const_arrays, global_arrays> init( int *argc ,
 
   //Define the maximum stable time step based on an assumed maximum wind speed
   double dt = fmin(dx,dz) / max_speed * cfl;
-  //Set initial elapsed model time and output_counter to zero
-  etime = 0.0;
-  output_counter = 0.0;
 
   //If I'm the main process in MPI, display some grid information
   if (mainproc) {
@@ -683,6 +672,8 @@ std::tuple<global_scalars, global_const_arrays, global_arrays> init( int *argc ,
 #if defined(__cpp_designated_initializers)
     global_scalars{
       .dt = dt,
+      .etime = 0.0,
+      .output_counter = 0.0,
       .nx = nx,
       .nz = nz,
       .i_beg = i_beg,
@@ -708,6 +699,8 @@ std::tuple<global_scalars, global_const_arrays, global_arrays> init( int *argc ,
 #else
     global_scalars{
       dt,
+      etime,
+      output_counter,
       nx,
       nz,
       i_beg,
