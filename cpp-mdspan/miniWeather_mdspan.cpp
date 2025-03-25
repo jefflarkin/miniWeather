@@ -118,15 +118,17 @@ struct global_scalars {
   bool mainproc() const { return myrank == 0; } //Am I the main process (rank == 0)?
 };
 
-struct global_arrays {
+// Arrays that are allocated in init and never changed after that.
+struct global_const_arrays {
   std::unique_ptr<double[]> hy_dens_cell;         //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
   std::unique_ptr<double[]> hy_dens_theta_cell;   //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
   std::unique_ptr<double[]> hy_dens_int;          //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
   std::unique_ptr<double[]> hy_dens_theta_int;    //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
   std::unique_ptr<double[]> hy_pressure_int;      //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
+};
 
-  // Arrays that are allocated in init and updated throughout the simulation.
-
+// Arrays that are allocated in init and updated throughout the simulation.
+struct global_arrays {
   alloc_3d state;     // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
   alloc_3d state_tmp; // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
   alloc_3d flux;      // Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
@@ -134,7 +136,7 @@ struct global_arrays {
 };
 
 //Declaring the functions defined after "main"
-std::tuple<global_scalars, global_arrays> init(int *argc , char ***argv );
+std::tuple<global_scalars, global_const_arrays, global_arrays> init(int *argc , char ***argv );
 void finalize();
 
 struct test_case {
@@ -172,52 +174,45 @@ r_t_pair hydro_const_bvfreq(double z, double bv_freq0);
 double sample_ellipse_cosine(double x, double z, double amp, double x0, double z0,
                              double xrad, double zrad);
 
-int output(const global_scalars& scalars, const global_arrays& arrays,
-           double etime, int num_out);
+int output(view_3d state,
+  const global_scalars& scalars,
+  const global_const_arrays& arrays,
+  double etime, int num_out);
 void ncwrap(int ierr, int line);
 int perform_timestep(view_3d state, view_3d state_tmp,
                      view_3d flux, view_3d tend,
                      const global_scalars& scalars,
-                     const global_arrays& arrays,
+                     const global_const_arrays& arrays,
                      int direction_switch);
 void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state_out,
                         double dt /* not scalars.dt */,
                         direction dir, view_3d flux, view_3d tend,
                         const global_scalars& scalars,
-                        const global_arrays& arrays);
+                        const global_const_arrays& arrays);
 void compute_tendencies_x(view_3d state, view_3d flux, view_3d tend,
-  double dt, int nx, int nz, const global_arrays& arrays);
+  double dt, int nx, int nz, const global_const_arrays& arrays);
 void compute_tendencies_z(view_3d state, view_3d flux, view_3d tend,
-  double dt, int nx, int nz, const global_arrays& arrays);
+  double dt, int nx, int nz, const global_const_arrays& arrays);
 void set_halo_values_x(view_3d state,
-  const global_scalars& scalars, const global_arrays& arrays);
+  const global_scalars& scalars, const global_const_arrays& arrays);
 void set_halo_values_z(view_3d state,
-  const global_scalars& scalars, const global_arrays& arrays);
+  const global_scalars& scalars, const global_const_arrays& arrays);
 
 struct reduction_result {
   double mass;
   double te;
 };
-reduction_result reductions(const global_scalars& scalars, const global_arrays& arrays);
-
+reduction_result reductions(view_3d state,
+  const global_scalars& scalars,
+  const global_const_arrays& arrays);
 
 ///////////////////////////////////////////////////////////////////////////////////////
 // THE MAIN PROGRAM STARTS HERE
 ///////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
-  auto [scalars, arrays] = init( &argc , &argv );
+  auto [scalars, const_arrays, arrays] = init( &argc , &argv );
   int direction_switch = 1;
   int num_out = 0;
-
-  //Initial reductions for mass, kinetic energy, and total energy.
-  //
-  // mass0: initial domain total for mass
-  // te0:   initial domain total for total energy
-  auto [mass0, te0] = reductions(scalars, arrays);
-  {
-    fprintf(stderr, "mass0: %le\n" , mass0);
-    fprintf(stderr, "te0:   %le\n" , te0  );
-  }
   auto state_view = view_3d(arrays.state.get(),
     NUM_VARS, scalars.nz + 2 * hs, scalars.nx + 2 * hs);
   auto state_tmp_view = view_3d(arrays.state_tmp.get(),
@@ -227,8 +222,18 @@ int main(int argc, char **argv) {
   auto tend_view = view_3d(arrays.tend.get(),
     NUM_VARS, scalars.nz, scalars.nx);
 
+  //Initial reductions for mass, kinetic energy, and total energy.
+  //
+  // mass0: initial domain total for mass
+  // te0:   initial domain total for total energy
+  auto [mass0, te0] = reductions(state_view, scalars, const_arrays);
+  {
+    fprintf(stderr, "mass0: %le\n" , mass0);
+    fprintf(stderr, "te0:   %le\n" , te0  );
+  }
+
   //Output the initial state
-  num_out = output(scalars, arrays, etime, num_out);
+  num_out = output(state_view, scalars, const_arrays, etime, num_out);
 
   ////////////////////////////////////////////////////
   // MAIN TIME STEP LOOP
@@ -241,7 +246,7 @@ int main(int argc, char **argv) {
     }
     //Perform a single time step
     direction_switch = perform_timestep(state_view, state_tmp_view, flux_view, tend_view,
-      scalars, arrays, direction_switch);
+      scalars, const_arrays, direction_switch);
     //Inform the user
 #if ! defined(NO_INFORM)
     if (scalars.mainproc()) {
@@ -254,7 +259,7 @@ int main(int argc, char **argv) {
     //If it's time for output, reset the counter, and do output
     if (output_counter >= output_freq) {
       output_counter = output_counter - output_freq;
-      num_out = output(scalars, arrays, etime, num_out);
+      num_out = output(state_view, scalars, const_arrays, etime, num_out);
     }
   }
   auto t2 = std::chrono::steady_clock::now();
@@ -263,7 +268,7 @@ int main(int argc, char **argv) {
   }
 
   //Final reductions for mass, kinetic energy, and total energy
-  auto [mass, te] = reductions(scalars, arrays);
+  auto [mass, te] = reductions(state_view, scalars, const_arrays);
 
   if (scalars.mainproc()) {
     fprintf(stderr, "d_mass: %le\n" , (mass - mass0)/mass0 );
@@ -286,7 +291,7 @@ int main(int argc, char **argv) {
 int perform_timestep(view_3d state, view_3d state_tmp,
                      view_3d flux, view_3d tend,
                      const global_scalars& scalars,
-                     const global_arrays& arrays,
+                     const global_const_arrays& arrays,
                      int direction_switch)
 {
   const double dt = scalars.dt;
@@ -323,7 +328,7 @@ void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state
                         double dt /* not scalars.dt */,
                         direction dir, view_3d flux, view_3d tend,
                         const global_scalars& scalars,
-                        const global_arrays& arrays)
+                        const global_const_arrays& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -367,7 +372,7 @@ void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state
 //First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
 void compute_tendencies_x(view_3d state, view_3d flux, view_3d tend,
-  double dt, int nx, int nz, const global_arrays& arrays)
+  double dt, int nx, int nz, const global_const_arrays& arrays)
 {
   double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS], hv_coef;
   //Compute the hyperviscosity coefficient
@@ -423,7 +428,7 @@ void compute_tendencies_x(view_3d state, view_3d flux, view_3d tend,
 //First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
 void compute_tendencies_z(view_3d state, view_3d flux, view_3d tend,
-  double dt, int nx, int nz, const global_arrays& arrays)
+  double dt, int nx, int nz, const global_const_arrays& arrays)
 {
   double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS];
   //Compute the hyperviscosity coefficient
@@ -485,7 +490,7 @@ void compute_tendencies_z(view_3d state, view_3d flux, view_3d tend,
 
 //Set this MPI task's halo values in the x-direction. This routine will require MPI
 void set_halo_values_x(view_3d state,
-  const global_scalars& scalars, const global_arrays& arrays)
+  const global_scalars& scalars, const global_const_arrays& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -532,7 +537,7 @@ void set_halo_values_x(view_3d state,
 //Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
 //decomposition in the vertical direction
 void set_halo_values_z(view_3d state,
-  const global_scalars& scalars, const global_arrays& arrays)
+  const global_scalars& scalars, const global_const_arrays& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -563,7 +568,7 @@ void set_halo_values_z(view_3d state,
 }
 
 
-std::tuple<global_scalars, global_arrays> init( int *argc , char ***argv ) {
+std::tuple<global_scalars, global_const_arrays, global_arrays> init( int *argc , char ***argv ) {
   (void) MPI_Init(argc,argv);
 
   /////////////////////////////////////////////////////////////
@@ -687,12 +692,14 @@ std::tuple<global_scalars, global_arrays> init( int *argc , char ***argv ) {
       .left_rank = left_rank,
       .right_rank = right_rank
     },
-    global_arrays{
+    global_const_arrays{
       .hy_dens_cell = std::move(hy_dens_cell),
       .hy_dens_theta_cell = std::move(hy_dens_theta_cell),
       .hy_dens_int = std::move(hy_dens_int),
       .hy_dens_theta_int = std::move(hy_dens_theta_int),
-      .hy_pressure_int = std::move(hy_pressure_int),
+      .hy_pressure_int = std::move(hy_pressure_int)
+    },
+    global_arrays{
       .state = std::move(state),
       .state_tmp = std::move(state_tmp),
       .flux = std::move(flux),
@@ -709,6 +716,13 @@ std::tuple<global_scalars, global_arrays> init( int *argc , char ***argv ) {
       myrank,
       left_rank,
       right_rank
+    },
+    global_const_arrays{
+      std::move(hy_dens_cell),
+      std::move(hy_dens_theta_cell),
+      std::move(hy_dens_int),
+      std::move(hy_dens_theta_int),
+      std::move(hy_pressure_int)
     },
     global_arrays{
       std::move(hy_dens_cell),
@@ -855,7 +869,9 @@ double sample_ellipse_cosine( double x , double z , double amp , double x0 , dou
 //
 // Input: number of outputs performed before calling this function.
 // Return: number of outputs performed after calling this function.
-int output(const global_scalars& scalars, const global_arrays& arrays,
+int output(view_3d state,
+  const global_scalars& scalars,
+  const global_const_arrays& arrays,
   double etime, int num_out) {
 
   int ncid, t_dimid, x_dimid, z_dimid, theta_varid, t_varid, dimids[3];
@@ -922,12 +938,12 @@ int output(const global_scalars& scalars, const global_arrays& arrays,
   for (int k = 0; k < scalars.nz; ++k) {
     for (int i = 0; i < scalars.nx; ++i) {
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
-      dens(k, i) = arrays.state(ID_DENS, k+hs, i+hs);
-      uwnd(k, i) = arrays.state(ID_UMOM, k+hs, i+hs) / (arrays.hy_dens_cell[k+hs] + arrays.state(ID_DENS, k+hs, i+hs));
-      wwnd(k, i) = arrays.state(ID_WMOM, k+hs, i+hs) / (arrays.hy_dens_cell[k+hs] + arrays.state(ID_DENS, k+hs, i+hs));
+      dens(k, i) = state(ID_DENS, k+hs, i+hs);
+      uwnd(k, i) = state(ID_UMOM, k+hs, i+hs) / (arrays.hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs));
+      wwnd(k, i) = state(ID_WMOM, k+hs, i+hs) / (arrays.hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs));
 #endif      
-      theta(k, i) = (arrays.state(ID_RHOT, k+hs, i+hs) + arrays.hy_dens_theta_cell[k+hs]) /
-                    (arrays.hy_dens_cell[k+hs] + arrays.state(ID_DENS, k+hs, i+hs)) -
+      theta(k, i) = (state(ID_RHOT, k+hs, i+hs) + arrays.hy_dens_theta_cell[k+hs]) /
+                    (arrays.hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs)) -
                     arrays.hy_dens_theta_cell[k+hs] / arrays.hy_dens_cell[k+hs];
     }
   }
@@ -979,7 +995,10 @@ void finalize() {
 
 
 //Compute reduced quantities for error checking without resorting to the "ncdiff" tool
-reduction_result reductions(const global_scalars& scalars, const global_arrays& arrays) {
+reduction_result reductions(view_3d state,
+  const global_scalars& scalars,
+  const global_const_arrays& arrays)
+{
   reduction_result result{0.0, 0.0};
 
   const int nx = scalars.nx;
@@ -987,10 +1006,10 @@ reduction_result reductions(const global_scalars& scalars, const global_arrays& 
 
   for (int k = 0; k < nz; ++k) {
     for (int i = 0; i < nx; ++i) {
-      double r  =   arrays.state(ID_DENS, k+hs, i+hs) + arrays.hy_dens_cell[hs+k];             // Density
-      double u  =   arrays.state(ID_UMOM, k+hs, i+hs) / r;                              // U-wind
-      double w  =   arrays.state(ID_WMOM, k+hs, i+hs) / r;                              // W-wind
-      double th = ( arrays.state(ID_RHOT, k+hs, i+hs) + arrays.hy_dens_theta_cell[hs+k] ) / r; // Potential Temperature (theta)
+      double r  =  state(ID_DENS, k+hs, i+hs) + arrays.hy_dens_cell[hs+k];      // Density
+      double u  =  state(ID_UMOM, k+hs, i+hs) / r;                              // U-wind
+      double w  =  state(ID_WMOM, k+hs, i+hs) / r;                              // W-wind
+      double th = (state(ID_RHOT, k+hs, i+hs) + arrays.hy_dens_theta_cell[hs+k]) / r; // Potential Temperature (theta)
       double p  = C0 * pow(r * th, gamm);                          // Pressure
       double t  = th / pow(p0 / p, rd / cp);                       // Temperature
       double ke = r*(u*u+w*w);                                     // Kinetic Energy
