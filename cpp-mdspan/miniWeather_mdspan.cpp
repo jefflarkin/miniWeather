@@ -133,9 +133,6 @@ struct global_arrays {
   alloc_3d tend;      // Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
 };
 
-int    num_out = 0; // The number of outputs performed so far
-int    direction_switch = 1;
-
 //Declaring the functions defined after "main"
 std::tuple<global_scalars, global_arrays> init(int *argc , char ***argv );
 void finalize();
@@ -175,12 +172,14 @@ r_t_pair hydro_const_bvfreq(double z, double bv_freq0);
 double sample_ellipse_cosine(double x, double z, double amp, double x0, double z0,
                              double xrad, double zrad);
 
-void output(const global_scalars& scalars, const global_arrays& arrays, double etime);
+int output(const global_scalars& scalars, const global_arrays& arrays,
+           double etime, int num_out);
 void ncwrap(int ierr, int line);
-void perform_timestep(view_3d state, view_3d state_tmp,
-                      view_3d flux, view_3d tend,
-                      const global_scalars& scalars,
-                      const global_arrays& arrays);
+int perform_timestep(view_3d state, view_3d state_tmp,
+                     view_3d flux, view_3d tend,
+                     const global_scalars& scalars,
+                     const global_arrays& arrays,
+                     int direction_switch);
 void semi_discrete_step(view_3d state_init, view_3d state_forcing, view_3d state_out,
                         double dt /* not scalars.dt */,
                         direction dir, view_3d flux, view_3d tend,
@@ -206,8 +205,9 @@ reduction_result reductions(const global_scalars& scalars, const global_arrays& 
 // THE MAIN PROGRAM STARTS HERE
 ///////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
-
   auto [scalars, arrays] = init( &argc , &argv );
+  int direction_switch = 1;
+  int num_out = 0;
 
   //Initial reductions for mass, kinetic energy, and total energy.
   //
@@ -228,7 +228,7 @@ int main(int argc, char **argv) {
     NUM_VARS, scalars.nz, scalars.nx);
 
   //Output the initial state
-  output(scalars, arrays, etime);
+  num_out = output(scalars, arrays, etime, num_out);
 
   ////////////////////////////////////////////////////
   // MAIN TIME STEP LOOP
@@ -240,7 +240,8 @@ int main(int argc, char **argv) {
       scalars.dt = sim_time - etime;
     }
     //Perform a single time step
-    perform_timestep(state_view, state_tmp_view, flux_view, tend_view, scalars, arrays);
+    direction_switch = perform_timestep(state_view, state_tmp_view, flux_view, tend_view,
+      scalars, arrays, direction_switch);
     //Inform the user
 #if ! defined(NO_INFORM)
     if (scalars.mainproc()) {
@@ -253,7 +254,7 @@ int main(int argc, char **argv) {
     //If it's time for output, reset the counter, and do output
     if (output_counter >= output_freq) {
       output_counter = output_counter - output_freq;
-      output(scalars, arrays, etime);
+      num_out = output(scalars, arrays, etime, num_out);
     }
   }
   auto t2 = std::chrono::steady_clock::now();
@@ -280,10 +281,13 @@ int main(int argc, char **argv) {
 // q*     = q[n] + dt/3 * rhs(q[n])
 // q**    = q[n] + dt/2 * rhs(q*  )
 // q[n+1] = q[n] + dt/1 * rhs(q** )
-void perform_timestep(view_3d state, view_3d state_tmp,
-                      view_3d flux, view_3d tend,
-                      const global_scalars& scalars,
-                      const global_arrays& arrays)
+//
+// Return: updated direction_switch
+int perform_timestep(view_3d state, view_3d state_tmp,
+                     view_3d flux, view_3d tend,
+                     const global_scalars& scalars,
+                     const global_arrays& arrays,
+                     int direction_switch)
 {
   const double dt = scalars.dt;
   if (direction_switch) {
@@ -306,6 +310,8 @@ void perform_timestep(view_3d state, view_3d state_tmp,
     semi_discrete_step(state, state_tmp, state    , dt / 1, direction::X, flux, tend, scalars, arrays);
   }
   if (direction_switch) { direction_switch = 0; } else { direction_switch = 1; }
+
+  return direction_switch;
 }
 
 
@@ -846,7 +852,11 @@ double sample_ellipse_cosine( double x , double z , double amp , double x0 , dou
 //Output the fluid state (state) to a NetCDF file at a given elapsed model time (etime)
 //The file I/O uses parallel-netcdf, the only external library required for this mini-app.
 //If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
-void output(const global_scalars& scalars, const global_arrays& arrays, double etime) {
+//
+// Input: number of outputs performed before calling this function.
+// Return: number of outputs performed after calling this function.
+int output(const global_scalars& scalars, const global_arrays& arrays,
+  double etime, int num_out) {
 
   int ncid, t_dimid, x_dimid, z_dimid, theta_varid, t_varid, dimids[3];
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
@@ -948,10 +958,8 @@ void output(const global_scalars& scalars, const global_arrays& arrays, double e
   //Close the file
   ncwrap( ncmpi_close(ncid) , __LINE__ );
 
-  //Increment the number of outputs
-  num_out = num_out + 1;
-
   (void) MPI_Info_free(&mpi_info);
+  return num_out + 1;
 }
 
 
