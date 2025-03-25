@@ -76,9 +76,16 @@ double constexpr dz            = zlen / nz_glob; // grid spacing in the x-direct
 namespace md {
   using MDSPAN_IMPL_STANDARD_NAMESPACE :: MDSPAN_IMPL_PROPOSED_NAMESPACE :: dims;
 } // namespace md
+
+// FIXME use dims<NDIMS, int> (make_unique_mdarray constructor
+// that takes extents doesn't like that)
 using alloc_3d = md::unique_mdarray<double, md::dims<3>, md::layout_right>;
-using view_3d = md::mdspan<double, md::dims<3>, md::layout_right>;
+using view_3d =       md::mdspan<double, md::dims<3>, md::layout_right>;
 using view_3d_const = md::mdspan<const double, md::dims<3>, md::layout_right>;
+
+using alloc_1d = std::unique_ptr<double[]>;
+using view_1d = md::mdspan<double, md::dims<1>, md::layout_right>;
+using view_1d_const = md::mdspan<const double, md::dims<1>, md::layout_right>;
 
 //Runtime variable arrays
 //
@@ -111,24 +118,70 @@ struct global_scalars {
 };
 
 // Arrays that are allocated in init and never changed after that.
-struct global_const_arrays {
-  std::unique_ptr<double[]> hy_dens_cell;         //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
-  std::unique_ptr<double[]> hy_dens_theta_cell;   //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
-  std::unique_ptr<double[]> hy_dens_int;          //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
-  std::unique_ptr<double[]> hy_dens_theta_int;    //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
-  std::unique_ptr<double[]> hy_pressure_int;      //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
+class global_const_arrays {
+public:
+  global_const_arrays(int nx, int nz, int hs) :
+    nx_(nx),
+    nz_(nz),
+    hs_(hs),
+    hy_dens_cell_      (std::make_unique<double[]>(nz+2*hs)),
+    hy_dens_theta_cell_(std::make_unique<double[]>(nz+2*hs)),
+    hy_dens_int_       (std::make_unique<double[]>(nz+1)),
+    hy_dens_theta_int_ (std::make_unique<double[]>(nz+1)),
+    hy_pressure_int_   (std::make_unique<double[]>(nz+1))
+  {}
+
+  view_1d_const hy_dens_cell() const {
+    return view_1d_const{hy_dens_cell_.get(), nz_ + 2 * hs_};
+  }
+  view_1d_const hy_dens_theta_cell() const {
+    return view_1d_const{hy_dens_theta_cell_.get(), nz_ + 2 * hs_};
+  }
+  view_1d_const hy_dens_int() const {
+    return view_1d_const{hy_dens_int_.get(), nz_ + 1};
+  }
+  view_1d_const hy_dens_theta_int() const {
+    return view_1d_const{hy_dens_theta_int_.get(), nz_ + 1};
+  }
+  view_1d_const hy_pressure_int() const {
+    return view_1d_const{hy_pressure_int_.get(), nz_ + 1};
+  }
+
+  view_1d hy_dens_cell() {
+    return view_1d{hy_dens_cell_.get(), nz_ + 2 * hs_};
+  }
+  view_1d hy_dens_theta_cell() {
+    return view_1d{hy_dens_theta_cell_.get(), nz_ + 2 * hs_};
+  }
+  view_1d hy_dens_int() {
+    return view_1d{hy_dens_int_.get(), nz_ + 1};
+  }
+  view_1d hy_dens_theta_int() {
+    return view_1d{hy_dens_theta_int_.get(), nz_ + 1};
+  }
+  view_1d hy_pressure_int() {
+    return view_1d{hy_pressure_int_.get(), nz_ + 1};
+  }
+
+private:
+  int nx_, nz_, hs_;
+  std::unique_ptr<double[]> hy_dens_cell_;       //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
+  std::unique_ptr<double[]> hy_dens_theta_cell_; //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
+  std::unique_ptr<double[]> hy_dens_int_;        //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
+  std::unique_ptr<double[]> hy_dens_theta_int_;  //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
+  std::unique_ptr<double[]> hy_pressure_int_;    //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
 };
 
 // Arrays that are allocated in init and updated throughout the simulation.
 class global_arrays {
 public:
-  global_arrays(alloc_3d state, alloc_3d state_tmp, alloc_3d flux, alloc_3d tend)
-    : state_(std::move(state)),
-      state_tmp_(std::move(state_tmp)),
-      flux_(std::move(flux)),
-      tend_(std::move(tend))
+  global_arrays(int nx, int nz) :
+    state_    (md::make_unique_mdarray<double>(NUM_VARS, nz+2*hs, nx+2*hs)),
+    state_tmp_(md::make_unique_mdarray<double>(NUM_VARS, nz+2*hs, nx+2*hs)),
+    flux_     (md::make_unique_mdarray<double>(NUM_VARS, nz+1, nx+1)),
+    tend_     (md::make_unique_mdarray<double>(NUM_VARS, nz, nx))
   {}
-  
+
   // The view member functions are const, but currently return nonconst views.
   // We might consider a different model where users declare access intent
   // (read-only, write-only, or read-write) at the point of use.
@@ -373,6 +426,8 @@ void semi_discrete_step(view_3d_const state_init,
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Apply the tendencies to the fluid state
+
+  auto hy_dens_cell = arrays.hy_dens_cell();
   const int i_beg = scalars.i_beg;
   const int k_beg = scalars.k_beg;
   for (int ll = 0; ll < NUM_VARS; ++ll) {
@@ -382,7 +437,7 @@ void semi_discrete_step(view_3d_const state_init,
           const double x = (i_beg + i+0.5)*dx;
           const double z = (k_beg + k+0.5)*dz;
           const double wpert = sample_ellipse_cosine(x, z, 0.01, xlen/8, 1000.0, 500.0, 500.0);
-          tend(ID_WMOM, k, i) += wpert * arrays.hy_dens_cell[hs+k];
+          tend(ID_WMOM, k, i) += wpert * hy_dens_cell[hs+k];
         }
         state_out(ll, k+hs, i+hs) = state_init(ll, k+hs, i+hs) + dt * tend(ll, k, i);
       }
@@ -405,6 +460,10 @@ void compute_tendencies_x(view_3d_const state, view_3d flux, view_3d tend,
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Compute fluxes in the x-direction for each cell
+
+  auto hy_dens_cell = arrays.hy_dens_cell();
+  auto hy_dens_theta_cell = arrays.hy_dens_theta_cell();
+
   for (int k = 0; k < nz; ++k) {
     for (int i = 0; i < nx+1; ++i) {
       //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
@@ -419,10 +478,10 @@ void compute_tendencies_x(view_3d_const state, view_3d flux, view_3d tend,
       }
 
       //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-      double r = vals[ID_DENS] + arrays.hy_dens_cell[k+hs];
+      double r = vals[ID_DENS] + hy_dens_cell[k+hs];
       double u = vals[ID_UMOM] / r;
       double w = vals[ID_WMOM] / r;
-      double t = ( vals[ID_RHOT] + arrays.hy_dens_theta_cell[k+hs] ) / r;
+      double t = ( vals[ID_RHOT] + hy_dens_theta_cell[k+hs] ) / r;
       double p = C0 * pow(r*t, gamm);
 
       //Compute the flux vector
@@ -461,6 +520,11 @@ void compute_tendencies_z(view_3d_const state, view_3d flux, view_3d tend,
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Compute fluxes in the x-direction for each cell
+
+  auto hy_dens_int = arrays.hy_dens_int();
+  auto hy_dens_theta_int = arrays.hy_dens_theta_int();
+  auto hy_pressure_int = arrays.hy_pressure_int();
+
   for (int k = 0; k < nz+1; ++k) {
     for (int i = 0; i < nx; ++i) {
       //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
@@ -475,11 +539,11 @@ void compute_tendencies_z(view_3d_const state, view_3d flux, view_3d tend,
       }
 
       //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-      double r = vals[ID_DENS] + arrays.hy_dens_int[k];
+      double r = vals[ID_DENS] + hy_dens_int[k];
       double u = vals[ID_UMOM] / r;
       double w = vals[ID_WMOM] / r;
-      double t = (vals[ID_RHOT] + arrays.hy_dens_theta_int[k]) / r;
-      double p = C0 * pow(r * t, gamm) - arrays.hy_pressure_int[k];
+      double t = (vals[ID_RHOT] + hy_dens_theta_int[k]) / r;
+      double p = C0 * pow(r * t, gamm) - hy_pressure_int[k];
       //Enforce vertical boundary condition and exact mass conservation
       if (k == 0 || k == nz) {
         w                = 0;
@@ -542,14 +606,16 @@ void set_halo_values_x(view_3d state,
 
   if (data_spec_int == DATA_SPEC_INJECTION) {
     if (scalars.myrank == 0) {
+      auto hy_dens_cell = arrays.hy_dens_cell();
+      auto hy_dens_theta_cell = arrays.hy_dens_theta_cell();
       const int k_beg = scalars.k_beg;
       for (int k = 0; k < nz; ++k) {
         for (int i = 0; i < hs; ++i) {
           const double z = (k_beg + k+0.5)*dz;
           if (fabs(z-3*zlen/4) <= zlen/16) {
-            state(ID_UMOM, k+hs, i) = (state(ID_DENS, k+hs, i) + arrays.hy_dens_cell[k+hs]) * 50.0;
-            state(ID_RHOT, k+hs, i) = (state(ID_DENS, k+hs, i) + arrays.hy_dens_cell[k+hs]) * 298.0 -
-              arrays.hy_dens_theta_cell[k+hs];
+            state(ID_UMOM, k+hs, i) = (state(ID_DENS, k+hs, i) + hy_dens_cell[k+hs]) * 50.0;
+            state(ID_RHOT, k+hs, i) = (state(ID_DENS, k+hs, i) + hy_dens_cell[k+hs]) * 298.0 -
+              hy_dens_theta_cell[k+hs];
           }
         }
       }
@@ -565,6 +631,7 @@ void set_halo_values_z(view_3d state,
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
+  auto hy_dens_cell = arrays.hy_dens_cell();
 
   /////////////////////////////////////////////////
   // TODO: THREAD ME
@@ -577,10 +644,10 @@ void set_halo_values_z(view_3d state,
         state(ll, nz+hs, i) = 0.;
         state(ll, nz+hs+1, i) = 0.;
       } else if (ll == ID_UMOM) {
-        state(ll, 0, i) = state(ll, hs, i) / arrays.hy_dens_cell[hs] * arrays.hy_dens_cell[0];
-        state(ll, 1, i) = state(ll, hs, i) / arrays.hy_dens_cell[hs] * arrays.hy_dens_cell[1];
-        state(ll, nz+hs, i) = state(ll, nz+hs-1, i) / arrays.hy_dens_cell[nz+hs-1] * arrays.hy_dens_cell[nz+hs];
-        state(ll, nz+hs+1, i) = state(ll, nz+hs-1, i) / arrays.hy_dens_cell[nz+hs-1] * arrays.hy_dens_cell[nz+hs+1];
+        state(ll, 0, i) = state(ll, hs, i) / hy_dens_cell[hs] * hy_dens_cell[0];
+        state(ll, 1, i) = state(ll, hs, i) / hy_dens_cell[hs] * hy_dens_cell[1];
+        state(ll, nz+hs, i) = state(ll, nz+hs-1, i) / hy_dens_cell[nz+hs-1] * hy_dens_cell[nz+hs];
+        state(ll, nz+hs+1, i) = state(ll, nz+hs-1, i) / hy_dens_cell[nz+hs-1] * hy_dens_cell[nz+hs+1];
       } else {
         state(ll, 0, i) = state(ll, hs, i);
         state(ll, 1, i) = state(ll, hs, i);
@@ -627,12 +694,7 @@ init( int *argc , char ***argv )
   int right_rank = 0;
   bool mainproc = (myrank == 0);
 
-  global_arrays gl_arrs{
-    /* state = */     md::make_unique_mdarray<double>(NUM_VARS, nz+2*hs, nx+2*hs),
-    /* state_tmp = */ md::make_unique_mdarray<double>(NUM_VARS, nz+2*hs, nx+2*hs),
-    /* flux = */      md::make_unique_mdarray<double>(NUM_VARS, nz+1, nx+1),
-    /* tend = */      md::make_unique_mdarray<double>(NUM_VARS, nz, nx)
-  };
+  global_arrays gl_arrs(nx, nz);
   auto state = gl_arrs.state();
   auto state_tmp = gl_arrs.state_tmp();
   auto flux = gl_arrs.flux();
@@ -682,11 +744,13 @@ init( int *argc , char ***argv )
     }
   }
 
-  auto hy_dens_cell       = std::make_unique<double[]>(nz+2*hs);
-  auto hy_dens_theta_cell = std::make_unique<double[]>(nz+2*hs);
-  auto hy_dens_int        = std::make_unique<double[]>(nz+1);
-  auto hy_dens_theta_int  = std::make_unique<double[]>(nz+1);
-  auto hy_pressure_int    = std::make_unique<double[]>(nz+1);
+  global_const_arrays gl_const_arrs(nx, nz, hs);
+  // Get nonconst views, so we can fill them in below.
+  auto hy_dens_cell       = gl_const_arrs.hy_dens_cell();
+  auto hy_dens_theta_cell = gl_const_arrs.hy_dens_theta_cell();
+  auto hy_dens_int        = gl_const_arrs.hy_dens_int();
+  auto hy_dens_theta_int  = gl_const_arrs.hy_dens_theta_int();
+  auto hy_pressure_int    = gl_const_arrs.hy_pressure_int();
 
   //Compute the hydrostatic background state over vertical cell averages
   for (int k = 0; k < nz+2*hs; ++k) {
@@ -710,8 +774,8 @@ init( int *argc , char ***argv )
   }
 
   return std::tuple{
-#if defined(__cpp_designated_initializers)
     global_scalars{
+#if defined(__cpp_designated_initializers)
       .dt = dt,
       .etime = 0.0,
       .output_counter = 0.0,
@@ -723,17 +787,7 @@ init( int *argc , char ***argv )
       .myrank = myrank,
       .left_rank = left_rank,
       .right_rank = right_rank
-    },
-    global_const_arrays{
-      .hy_dens_cell = std::move(hy_dens_cell),
-      .hy_dens_theta_cell = std::move(hy_dens_theta_cell),
-      .hy_dens_int = std::move(hy_dens_int),
-      .hy_dens_theta_int = std::move(hy_dens_theta_int),
-      .hy_pressure_int = std::move(hy_pressure_int)
-    },
-    std::move(gl_arrs)
 #else
-    global_scalars{
       dt,
       /* etime = */ 0.0,
       /* output_counter = */ 0.0,
@@ -745,16 +799,10 @@ init( int *argc , char ***argv )
       myrank,
       left_rank,
       right_rank
-    },
-    global_const_arrays{
-      std::move(hy_dens_cell),
-      std::move(hy_dens_theta_cell),
-      std::move(hy_dens_int),
-      std::move(hy_dens_theta_int),
-      std::move(hy_pressure_int)
-    },
-    std::move(gl_arrs)
 #endif
+    },
+    std::move(gl_const_arrs),
+    std::move(gl_arrs)
   };
 }
 
@@ -954,16 +1002,19 @@ int output(view_3d_const state,
   }
 
   //Store perturbed values in the temp arrays for output
+
+  auto hy_dens_cell       = arrays.hy_dens_cell();
+  auto hy_dens_theta_cell = arrays.hy_dens_theta_cell();
   for (int k = 0; k < scalars.nz; ++k) {
     for (int i = 0; i < scalars.nx; ++i) {
 #if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
       dens(k, i) = state(ID_DENS, k+hs, i+hs);
-      uwnd(k, i) = state(ID_UMOM, k+hs, i+hs) / (arrays.hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs));
-      wwnd(k, i) = state(ID_WMOM, k+hs, i+hs) / (arrays.hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs));
+      uwnd(k, i) = state(ID_UMOM, k+hs, i+hs) / (hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs));
+      wwnd(k, i) = state(ID_WMOM, k+hs, i+hs) / (hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs));
 #endif      
-      theta(k, i) = (state(ID_RHOT, k+hs, i+hs) + arrays.hy_dens_theta_cell[k+hs]) /
-                    (arrays.hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs)) -
-                    arrays.hy_dens_theta_cell[k+hs] / arrays.hy_dens_cell[k+hs];
+      theta(k, i) = (state(ID_RHOT, k+hs, i+hs) + hy_dens_theta_cell[k+hs]) /
+                    (hy_dens_cell[k+hs] + state(ID_DENS, k+hs, i+hs)) -
+                    hy_dens_theta_cell[k+hs] / hy_dens_cell[k+hs];
     }
   }
 
@@ -1019,32 +1070,32 @@ reduction_result reductions(view_3d_const state,
   const global_const_arrays& arrays)
 {
   reduction_result result{0.0, 0.0};
-
   const int nx = scalars.nx;
   const int nz = scalars.nz;
+  auto hy_dens_cell = arrays.hy_dens_cell();
+  auto hy_dens_theta_cell = arrays.hy_dens_theta_cell();
 
   for (int k = 0; k < nz; ++k) {
     for (int i = 0; i < nx; ++i) {
-      double r  =  state(ID_DENS, k+hs, i+hs) + arrays.hy_dens_cell[hs+k];      // Density
-      double u  =  state(ID_UMOM, k+hs, i+hs) / r;                              // U-wind
-      double w  =  state(ID_WMOM, k+hs, i+hs) / r;                              // W-wind
-      double th = (state(ID_RHOT, k+hs, i+hs) + arrays.hy_dens_theta_cell[hs+k]) / r; // Potential Temperature (theta)
-      double p  = C0 * pow(r * th, gamm);                          // Pressure
-      double t  = th / pow(p0 / p, rd / cp);                       // Temperature
-      double ke = r*(u*u+w*w);                                     // Kinetic Energy
-      double ie = r*cv*t;                                          // Internal Energy
+      double r  =  state(ID_DENS, k+hs, i+hs) + hy_dens_cell[hs+k]; // Density
+      double u  =  state(ID_UMOM, k+hs, i+hs) / r;                  // U-wind
+      double w  =  state(ID_WMOM, k+hs, i+hs) / r;                  // W-wind
+      double th = (state(ID_RHOT, k+hs, i+hs) + hy_dens_theta_cell[hs+k]) / r; // Potential Temperature (theta)
+      double p  = C0 * pow(r * th, gamm);                           // Pressure
+      double t  = th / pow(p0 / p, rd / cp);                        // Temperature
+      double ke = r*(u*u+w*w);                                      // Kinetic Energy
+      double ie = r*cv*t;                                           // Internal Energy
       result.mass += r        *dx*dz; // Accumulate domain mass
       result.te   += (ke + ie)*dx*dz; // Accumulate domain total energy
     }
   }
-  double glob[2], loc[2];
-  loc[0] = result.mass;
-  loc[1] = result.te;
-  int ierr = MPI_Allreduce(loc,glob,2,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);
-  result.mass = glob[0];
-  result.te   = glob[1];
-
-  return result;
+  std::array<double, 2> loc{result.mass, result.te};
+  std::array<double, 2> glob{0.0, 0.0};
+  int ierr = MPI_Allreduce(loc.data(), glob.data(), 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+  return reduction_result{
+    .mass = glob[0],
+    .te = glob[1]
+  };
 }
 
 
