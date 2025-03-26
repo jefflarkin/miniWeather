@@ -1,8 +1,35 @@
-cmake_minimum_required(VERSION 3.12)
+# CMake 3.17 adds FindCUDAToolkit.
+cmake_minimum_required(VERSION 3.17)
 project(miniWeather-mdspan
   VERSION 0.0.1
   LANGUAGES CXX
 )
+
+# Find CUDA Toolkit; it's not required,
+# but other things (like CUB) depend on it.
+find_package(CUDAToolkit)
+
+if (DEFINED CUB_INCLUDE_DIR)
+  if (EXISTS "${CUB_INCLUDE_DIR}/cub/cub.cuh")
+    message(STATUS "User-defined CUB_INCLUDE_DIR: ${CUB_INCLUDE_DIR}")
+  else()
+    message(FATAL_ERROR "CUB_INCLUDE_DIR=\"{CUB_INCLUDE_DIR}\" is \
+ defined but \"${CUB_INCLUDE_DIR}/cub/cub.cuh\" does not exist.")
+  endif()
+else()
+  if (CUDAToolkit_FOUND)
+    # Check whether CUDA Toolkit's include directory has CUB in it.
+    find_path(CUB_INCLUDE_DIR
+      NAMES cub/cub.cuh
+      PATHS
+        ${CUDAToolkit_INCLUDE_DIRS}
+        /usr/include
+        /usr/local/include
+      DOC "Path to CUB include directory."
+    )
+    message(STATUS "Discovered CUB_INCLUDE_DIR: ${CUB_INCLUDE_DIR}")
+  endif()
+endif()
 
 # Option to override which version of the C++ Standard to use
 set(MINIWEATHER_CXX_STANDARD DETECT CACHE STRING "Override the default CXX_STANDARD")
