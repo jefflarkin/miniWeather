@@ -497,10 +497,6 @@ void compute_tendencies_x(view_3d_const state,
   auto hy_dens_cell = arrays.hy_dens_cell();
   auto hy_dens_theta_cell = arrays.hy_dens_theta_cell();
 
-  std::array<double, sten_size> stencil;
-  std::array<double, NUM_VARS> d3_vals;
-  std::array<double, NUM_VARS> vals;
-
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
@@ -509,7 +505,10 @@ void compute_tendencies_x(view_3d_const state,
     for (int i = 0; i < nx+1; ++i) {
       //Use fourth-order interpolation from four cell averages
       //to compute the value at the interface in question
+      std::array<double, NUM_VARS> d3_vals;
+      std::array<double, NUM_VARS> vals;
       for (int ll = 0; ll < NUM_VARS; ++ll) {
+        std::array<double, sten_size> stencil;
         for (int s = 0; s < sten_size; ++s) {
           stencil[s] = state(ll, k+hs, i+s);
         }
@@ -570,9 +569,6 @@ void compute_tendencies_z(view_3d_const state,
   auto hy_dens_theta_int = arrays.hy_dens_theta_int();
   auto hy_pressure_int = arrays.hy_pressure_int();
 
-  std::array<double, sten_size> stencil;
-  std::array<double, NUM_VARS> d3_vals;
-  std::array<double, NUM_VARS> vals;
 
   /////////////////////////////////////////////////
   // TODO: THREAD ME
@@ -582,7 +578,10 @@ void compute_tendencies_z(view_3d_const state,
     for (int i = 0; i < nx; ++i) {
       //Use fourth-order interpolation from four cell averages
       //to compute the value at the interface in question
+      std::array<double, NUM_VARS> d3_vals;
+      std::array<double, NUM_VARS> vals;
       for (int ll = 0; ll < NUM_VARS; ++ll) {
+        std::array<double, sten_size> stencil;
         for (int s = 0; s < sten_size; ++s) {
           stencil[s] = state(ll, k+s, i+hs);
         }
