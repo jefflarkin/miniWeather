@@ -28,6 +28,10 @@ else()
       DOC "Path to CUB include directory."
     )
     message(STATUS "Discovered CUB_INCLUDE_DIR: ${CUB_INCLUDE_DIR}")
+    if (CUDAToolkit_VERSION VERSION_LESS "12.8.0")
+      message(STATUS "CUDAToolkit_VERSION 12.6.85 is known to lack ForEachInExtents.  \
+Your CUDAToolkit_VERSION is ${CUDAToolkit_VERSION}.")
+    endif()
   endif()
 endif()
 
@@ -88,7 +92,7 @@ if (NOT mdspan_FOUND)
 endif()
 
 # Add mdspan include directory
-include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include" "${mdspan_SOURCE_DIR}/include")
+include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include" "${mdspan_SOURCE_DIR}/include" "${CUB_INCLUDE_DIR}")
 
 add_executable(serial miniWeather_mdspan.cpp)
 target_link_libraries(serial INTERFACE std::mdspan)

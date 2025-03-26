@@ -14,6 +14,9 @@
 #include <mpi.h>
 #include "pnetcdf.h"
 
+// nvc++ in 25.1 doesn't like including this header.
+//#include "cub/cub.cuh"
+
 #include "mdspan/mdspan.hpp"
 #include "unique_mdarray.hpp"
 
