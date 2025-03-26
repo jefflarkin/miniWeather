@@ -115,6 +115,7 @@ struct global_scalars {
   double etime = 0.0;          //Elapsed model time
   double output_counter = 0.0; //Helps determine when it's time to do output
   int num_out = 0;             //Number of outputs performed
+  int direction_switch = 1;    //Switch to alternate the order of directions
 };
 
 // Arrays that are allocated and filled in init and never changed after that.
@@ -192,9 +193,11 @@ public:
     tend_     (make_unique_array_3d(NUM_VARS, nz, nx))
   {}
 
-  // The view member functions are nonconst and return mdspan-of-nonconst.
-  // We might consider a different model where users declare access intent
-  // (read-only, write-only, or read-write) at the point of use.
+  // The current model for member functions that get a view of an array
+  // is for the const-ness of the global_arrays object to determine
+  // whether the view is a view-of-const or view-of-nonconst.
+  // We might consider a different model where users explicitly declare
+  // access intent (read-only, write-only, or read-write) at the point of use.
   view_3d state() {
     // The various allocations have related dimensions that depend on
     // just a few metadata (NUM_VARS, nz, nx, and hs).
@@ -211,6 +214,15 @@ public:
   }
   view_3d tend() {
     return view_3d{tend_.get(), NUM_VARS, nz_, nx_};
+  }
+
+  view_3d_const state() const {
+    // The various allocations have related dimensions that depend on
+    // just a few metadata (NUM_VARS, nz, nx, and hs).
+    // Storing extents for each allocation would duplicate metadata storage.
+    // Instead, we use flat allocations and construct layout mappings on the fly
+    // in the member functions that return (mdspan) views.
+    return view_3d_const{state_.get(), NUM_VARS, nz_ + 2 * hs_, nx_ + 2 * hs_};
   }
 
 private:
@@ -272,12 +284,11 @@ void output(view_3d_const state,
   const global_const_arrays& const_arrays,
   global_scalars& scalars);
 void ncwrap(int ierr, int line);
-int perform_timestep(view_3d state, view_3d state_tmp,
-                     view_3d flux, view_3d tend,
-                     const global_const_scalars& c_scalars,
-                     const global_const_arrays& c_arrays,
-                     const global_scalars& scalars,
-                     int direction_switch); // TODO Put in (mutable) scalars
+void perform_timestep(view_3d state, view_3d state_tmp,
+                      view_3d flux, view_3d tend,
+                      const global_const_scalars& c_scalars,
+                      const global_const_arrays& c_arrays,
+                      global_scalars& scalars);
 void semi_discrete_step(view_3d_const state_init,
                         view_3d state_forcing,
                         view_3d state_out,
@@ -311,13 +322,12 @@ reduction_result reductions(view_3d_const state,
 ///////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
   auto [const_scalars, scalars, const_arrays, arrays] = init( &argc , &argv );
-  int direction_switch = 1;
 
   //Initial reductions for mass, kinetic energy, and total energy.
   //
   // mass0: initial domain total for mass
   // te0:   initial domain total for total energy
-  auto [mass0, te0] = reductions(arrays.state(), const_scalars, const_arrays);
+  auto [mass0, te0] = reductions(std::as_const(arrays).state(), const_scalars, const_arrays);
 #if ! defined(NO_INFORM)
   if (const_scalars.mainproc()) {
     fprintf(stderr, "mass0: %le\n" , mass0);
@@ -326,22 +336,20 @@ int main(int argc, char **argv) {
 #endif
 
   //Output the initial state
-  output(arrays.state(), const_scalars, const_arrays, scalars);
+  output(std::as_const(arrays).state(), const_scalars, const_arrays, scalars);
 
   ////////////////////////////////////////////////////
   // MAIN TIME STEP LOOP
   ////////////////////////////////////////////////////
   [[maybe_unused]] auto t1 = std::chrono::steady_clock::now();
   while (scalars.etime < sim_time) {
-    //If the time step leads to exceeding the simulation time, shorten it for the last step
+    // If the time step leads to exceeding the simulation time,
+    // shorten it for the last step
     if (scalars.etime + scalars.dt > sim_time) {
       scalars.dt = sim_time - scalars.etime;
     }
-    //Perform a single time step
-    direction_switch = perform_timestep(arrays.state(), arrays.state_tmp(),
-      arrays.flux(), arrays.tend(), const_scalars, const_arrays, scalars,
-      direction_switch);
-    //Inform the user
+    perform_timestep(arrays.state(), arrays.state_tmp(), arrays.flux(),
+      arrays.tend(), const_scalars, const_arrays, scalars);
 #if ! defined(NO_INFORM)
     if (const_scalars.mainproc()) {
       fprintf(stderr, "Elapsed Time: %lf / %lf\n", scalars.etime, sim_time);
@@ -359,41 +367,40 @@ int main(int argc, char **argv) {
   [[maybe_unused]] auto t2 = std::chrono::steady_clock::now();
 #if ! defined(NO_INFORM)
   if (const_scalars.mainproc()) {
-    printf("CPU Time: %e sec\n", std::chrono::duration<double>(t2-t1).count());
+    printf("CPU Time: %e s\n", std::chrono::duration<double>(t2-t1).count());
   }
 #endif
 
-#if ! defined(NO_INFORM)
   //Final reductions for mass, kinetic energy, and total energy
   auto [mass, te] = reductions(arrays.state(), const_scalars, const_arrays);
   if (const_scalars.mainproc()) {
-    fprintf(stderr, "d_mass: %le\n" , (mass - mass0)/mass0 );
-    fprintf(stderr, "d_te:   %le\n" , (te   - te0  )/te0   );
+    printf("d_mass: %le\n" , (mass - mass0)/mass0);
+    printf("d_te:   %le\n" , (te   - te0  )/te0  );
   }
-#endif
 
   finalize();
 }
 
-
-//Performs a single dimensionally split time step using a simple low-storage three-stage Runge-Kutta time integrator
-//The dimensional splitting is a second-order-accurate alternating Strang splitting in which the
-//order of directions is alternated each time step.
-//The Runge-Kutta method used here is defined as follows:
+// Perform a single time step.
+// Time steps are dimensionally split and
+// use a simple low-storage three-stage Runge-Kutta time integrator.
+// The dimensional splitting is a second-order-accurate alternating Strang splitting
+// that alternates the order of directions each time step.
+//
+// The Runge-Kutta method used here is defined as follows:
+//
 // q*     = q[n] + dt/3 * rhs(q[n])
 // q**    = q[n] + dt/2 * rhs(q*  )
 // q[n+1] = q[n] + dt/1 * rhs(q** )
 //
-// Return: updated direction_switch
-int perform_timestep(view_3d state, view_3d state_tmp,
-                     view_3d flux, view_3d tend,
-                     const global_const_scalars& c_scalars,
-                     const global_const_arrays& c_arrays,
-                     const global_scalars& scalars,
-                     int direction_switch)
+void perform_timestep(view_3d state, view_3d state_tmp,
+                      view_3d flux, view_3d tend,
+                      const global_const_scalars& c_scalars,
+                      const global_const_arrays& c_arrays,
+                      global_scalars& scalars)
 {
   const double dt = scalars.dt;
-  if (direction_switch) {
+  if (scalars.direction_switch) {
     //x-direction first
     semi_discrete_step(state, state    , state_tmp, dt / 3, direction::X, flux, tend, c_scalars, c_arrays);
     semi_discrete_step(state, state_tmp, state_tmp, dt / 2, direction::X, flux, tend, c_scalars, c_arrays);
@@ -412,9 +419,11 @@ int perform_timestep(view_3d state, view_3d state_tmp,
     semi_discrete_step(state, state_tmp, state_tmp, dt / 2, direction::X, flux, tend, c_scalars, c_arrays);
     semi_discrete_step(state, state_tmp, state    , dt / 1, direction::X, flux, tend, c_scalars, c_arrays);
   }
-  if (direction_switch) { direction_switch = 0; } else { direction_switch = 1; }
-
-  return direction_switch;
+  if (scalars.direction_switch) {
+    scalars.direction_switch = 0;
+  } else {
+    scalars.direction_switch = 1;
+  }
 }
 
 
@@ -450,19 +459,22 @@ void semi_discrete_step(view_3d_const state_init,
   /////////////////////////////////////////////////
   //Apply the tendencies to the fluid state
 
-  auto hy_dens_cell = arrays.hy_dens_cell();
-  const int i_beg = scalars.i_beg;
-  const int k_beg = scalars.k_beg;
-  for (int ll = 0; ll < NUM_VARS; ++ll) {
-    for (int k = 0; k < nz; ++k) {
-      for (int i = 0; i < nx; ++i) {
-        if (data_spec_int == DATA_SPEC_GRAVITY_WAVES) {
-          const double x = (i_beg + i+0.5)*dx;
-          const double z = (k_beg + k+0.5)*dz;
-          const double wpert = sample_ellipse_cosine(x, z, 0.01, xlen/8, 1000.0, 500.0, 500.0);
-          tend(ID_WMOM, k, i) += wpert * hy_dens_cell[hs+k];
+  {
+    view_3d_const tend_c = tend;
+    auto hy_dens_cell = arrays.hy_dens_cell();
+    const int i_beg = scalars.i_beg;
+    const int k_beg = scalars.k_beg;
+    for (int ll = 0; ll < NUM_VARS; ++ll) {
+      for (int k = 0; k < nz; ++k) {
+        for (int i = 0; i < nx; ++i) {
+          if (data_spec_int == DATA_SPEC_GRAVITY_WAVES) {
+            const double x = (i_beg + i+0.5)*dx;
+            const double z = (k_beg + k+0.5)*dz;
+            const double wpert = sample_ellipse_cosine(x, z, 0.01, xlen/8, 1000.0, 500.0, 500.0);
+            tend(ID_WMOM, k, i) += wpert * hy_dens_cell[hs+k];
+          }
+          state_out(ll, k+hs, i+hs) = state_init(ll, k+hs, i+hs) + dt * tend_c(ll, k, i);
         }
-        state_out(ll, k+hs, i+hs) = state_init(ll, k+hs, i+hs) + dt * tend(ll, k, i);
       }
     }
   }
@@ -480,32 +492,36 @@ void compute_tendencies_x(view_3d_const state,
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
+  // Hyperviscosity coefficient
+  const double hv_coef = -hv_beta * dx / (16*dt);
+  auto hy_dens_cell = arrays.hy_dens_cell();
+  auto hy_dens_theta_cell = arrays.hy_dens_theta_cell();
 
-  double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS], hv_coef;
-  //Compute the hyperviscosity coefficient
-  hv_coef = -hv_beta * dx / (16*dt);
+  std::array<double, sten_size> stencil;
+  std::array<double, NUM_VARS> d3_vals;
+  std::array<double, NUM_VARS> vals;
+
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Compute fluxes in the x-direction for each cell
-
-  auto hy_dens_cell = arrays.hy_dens_cell();
-  auto hy_dens_theta_cell = arrays.hy_dens_theta_cell();
-
   for (int k = 0; k < nz; ++k) {
     for (int i = 0; i < nx+1; ++i) {
-      //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
+      //Use fourth-order interpolation from four cell averages
+      //to compute the value at the interface in question
       for (int ll = 0; ll < NUM_VARS; ++ll) {
         for (int s = 0; s < sten_size; ++s) {
           stencil[s] = state(ll, k+hs, i+s);
         }
         //Fourth-order-accurate interpolation of the state
         vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
-        //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
+        //First-order-accurate interpolation of the third spatial derivative
+        //of the state (for artificial viscosity)
         d3_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
       }
 
-      //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
+      //Compute density, u-wind, w-wind, potential temperature,
+      //and pressure (r,u,w,t,p respectively)
       double r = vals[ID_DENS] + hy_dens_cell[k+hs];
       double u = vals[ID_UMOM] / r;
       double w = vals[ID_WMOM] / r;
@@ -524,10 +540,13 @@ void compute_tendencies_x(view_3d_const state,
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Use the fluxes to compute tendencies for each cell
-  for (int ll = 0; ll < NUM_VARS; ++ll) {
-    for (int k = 0; k < nz; ++k) {
-      for (int i = 0; i < nx; ++i) {
-        tend(ll, k, i) = -( flux(ll, k, i+1) - flux(ll, k, i) ) / dx;
+  {
+    view_3d_const flux_c = flux;
+    for (int ll = 0; ll < NUM_VARS; ++ll) {
+      for (int k = 0; k < nz; ++k) {
+        for (int i = 0; i < nx; ++i) {
+          tend(ll, k, i) = -( flux_c(ll, k, i+1) - flux_c(ll, k, i) ) / dx;
+        }
       }
     }
   }
@@ -545,33 +564,37 @@ void compute_tendencies_z(view_3d_const state,
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
-
-  double stencil[4], d3_vals[NUM_VARS], vals[NUM_VARS];
-  //Compute the hyperviscosity coefficient
+  // Hyperviscosity coefficient
   const double hv_coef = -hv_beta * dz / (16*dt);
-  /////////////////////////////////////////////////
-  // TODO: THREAD ME
-  /////////////////////////////////////////////////
-  //Compute fluxes in the x-direction for each cell
-
   auto hy_dens_int = arrays.hy_dens_int();
   auto hy_dens_theta_int = arrays.hy_dens_theta_int();
   auto hy_pressure_int = arrays.hy_pressure_int();
 
+  std::array<double, sten_size> stencil;
+  std::array<double, NUM_VARS> d3_vals;
+  std::array<double, NUM_VARS> vals;
+
+  /////////////////////////////////////////////////
+  // TODO: THREAD ME
+  /////////////////////////////////////////////////
+  //Compute fluxes in the x-direction for each cell
   for (int k = 0; k < nz+1; ++k) {
     for (int i = 0; i < nx; ++i) {
-      //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
+      //Use fourth-order interpolation from four cell averages
+      //to compute the value at the interface in question
       for (int ll = 0; ll < NUM_VARS; ++ll) {
         for (int s = 0; s < sten_size; ++s) {
           stencil[s] = state(ll, k+s, i+hs);
         }
         //Fourth-order-accurate interpolation of the state
         vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
-        //First-order-accurate interpolation of the third spatial derivative of the state
+        //First-order-accurate interpolation of the third spatial derivative
+        //of the state
         d3_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
       }
 
-      //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
+      //Compute density, u-wind, w-wind, potential temperature,
+      //and pressure (r,u,w,t,p respectively)
       double r = vals[ID_DENS] + hy_dens_int[k];
       double u = vals[ID_UMOM] / r;
       double w = vals[ID_WMOM] / r;
@@ -595,12 +618,15 @@ void compute_tendencies_z(view_3d_const state,
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Use the fluxes to compute tendencies for each cell
-  for (int ll = 0; ll < NUM_VARS; ++ll) {
-    for (int k = 0; k < nz; ++k) {
-      for (int i = 0; i < nx; ++i) {
-        tend(ll, k, i) = -( flux(ll, k+1, i) - flux(ll, k, i) ) / dz;
-        if (ll == ID_WMOM) {
-          tend(ll, k, i) = tend(ll, k, i) - state(ID_DENS, k+hs, i+hs)*grav;
+  {
+    view_3d_const flux_c = flux;
+    for (int ll = 0; ll < NUM_VARS; ++ll) {
+      for (int k = 0; k < nz; ++k) {
+        for (int i = 0; i < nx; ++i) {
+          tend(ll, k, i) = -( flux_c(ll, k+1, i) - flux_c(ll, k, i) ) / dz;
+          if (ll == ID_WMOM) {
+            tend(ll, k, i) = tend(ll, k, i) - state(ID_DENS, k+hs, i+hs)*grav;
+          }
         }
       }
     }
@@ -672,10 +698,10 @@ void set_halo_values_z(view_3d state,
   for (int ll = 0; ll < NUM_VARS; ++ll) {
     for (int i = 0; i < nx+2*hs; ++i) {
       if (ll == ID_WMOM) {
-        state(ll, 0, i) = 0.;
-        state(ll, 1, i) = 0.;
-        state(ll, nz+hs, i) = 0.;
-        state(ll, nz+hs+1, i) = 0.;
+        state(ll, 0, i) = 0.0;
+        state(ll, 1, i) = 0.0;
+        state(ll, nz+hs, i) = 0.0;
+        state(ll, nz+hs+1, i) = 0.0;
       } else if (ll == ID_UMOM) {
         state(ll, 0, i) = state(ll, hs, i) / hy_dens_cell[hs] * hy_dens_cell[0];
         state(ll, 1, i) = state(ll, hs, i) / hy_dens_cell[hs] * hy_dens_cell[1];
@@ -708,12 +734,6 @@ init_result init( int *argc , char ***argv ) {
   //////////////////////////////////////////////
   // END MPI DUMMY SECTION
   //////////////////////////////////////////////
-
-  ////////////////////////////////////////////////////////////////////////////////
-  ////////////////////////////////////////////////////////////////////////////////
-  // YOU DON'T NEED TO ALTER ANYTHING BELOW THIS POINT IN THE CODE
-  ////////////////////////////////////////////////////////////////////////////////
-  ////////////////////////////////////////////////////////////////////////////////
 
   //Vertical direction isn't MPI-ized, so the rank's local values = the global values
   int k_beg = 0;
@@ -830,12 +850,14 @@ init_result init( int *argc , char ***argv ) {
       .dt = dt,
       .etime = 0.0,
       .output_counter = 0.0,
-      .num_out = 0
+      .num_out = 0,
+      .direction_switch = 1
 #else
       dt,
       /* etime = */ 0.0,
       /* output_counter = */ 0.0,
-      /* num_out = */ 0
+      /* num_out = */ 0,
+      /* direction_switch = */ 1
 #endif
     },
     std::move(gl_const_arrs),
