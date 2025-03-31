@@ -11,36 +11,6 @@ include(FetchContent)
 
 message(STATUS "C++ compiler ID: ${CMAKE_CXX_COMPILER_ID}")
 
-# Find CUDA Toolkit; it's not required,
-# but other things (like CUB) depend on it.
-find_package(CUDAToolkit)
-
-if (DEFINED CUB_INCLUDE_DIR)
-  if (EXISTS "${CUB_INCLUDE_DIR}/cub/cub.cuh")
-    message(STATUS "User-defined CUB_INCLUDE_DIR: ${CUB_INCLUDE_DIR}")
-  else()
-    message(FATAL_ERROR "CUB_INCLUDE_DIR=\"{CUB_INCLUDE_DIR}\" is \
- defined but \"${CUB_INCLUDE_DIR}/cub/cub.cuh\" does not exist.")
-  endif()
-else()
-  if (CUDAToolkit_FOUND)
-    # Check whether CUDA Toolkit's include directory has CUB in it.
-    find_path(CUB_INCLUDE_DIR
-      NAMES cub/cub.cuh
-      PATHS
-        ${CUDAToolkit_INCLUDE_DIRS}
-        /usr/include
-        /usr/local/include
-      DOC "Path to CUB include directory."
-    )
-    message(STATUS "Discovered CUB_INCLUDE_DIR: ${CUB_INCLUDE_DIR}")
-    if (CUDAToolkit_VERSION VERSION_LESS "12.8.0")
-      message(STATUS "CUDAToolkit_VERSION 12.6.85 is known to lack ForEachInExtents.  \
-Your CUDAToolkit_VERSION is ${CUDAToolkit_VERSION}.")
-    endif()
-  endif()
-endif()
-
 # Option to override which version of the C++ Standard to use
 set(MINIWEATHER_CXX_STANDARD DETECT CACHE STRING "Override the default CXX_STANDARD")
 
@@ -81,22 +51,6 @@ else()
   endif()
 endif()
 
-FetchContent_Declare(
-  mdspan
-  GIT_REPOSITORY https://github.com/kokkos/mdspan.git
-  GIT_TAG        stable
-  FIND_PACKAGE_ARGS NAMES mdspan
-)
-FetchContent_MakeAvailable(mdspan)
-
-# Add mdspan include directory
-message(STATUS "mdspan_SOURCE_DIR: ${mdspan_SOURCE_DIR}")
-message(STATUS "mdspan_BINARY_DIR: ${mdspan_BINARY_DIR}")
-# mdspan_BINARY_DIR does not have the header files in it.
-include_directories("${mdspan_SOURCE_DIR}/include")
-
-#include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include" "${CUB_INCLUDE_DIR}")
-
 include(FindOpenACC)
 find_package(OpenACC)
 if (OpenACC_FOUND)
@@ -107,6 +61,37 @@ else()
   message(STATUS "OpenACC not found")
 endif()
 
+
+# Find CUDA Toolkit; it's not required,
+# but other things (like CUB) depend on it.
+find_package(CUDAToolkit)
+
+if (DEFINED CUB_INCLUDE_DIR)
+  if (EXISTS "${CUB_INCLUDE_DIR}/cub/cub.cuh")
+    message(STATUS "User-defined CUB_INCLUDE_DIR: ${CUB_INCLUDE_DIR}")
+  else()
+    message(FATAL_ERROR "CUB_INCLUDE_DIR=\"{CUB_INCLUDE_DIR}\" is \
+ defined but \"${CUB_INCLUDE_DIR}/cub/cub.cuh\" does not exist.")
+  endif()
+else()
+  if (CUDAToolkit_FOUND)
+    # Check whether CUDA Toolkit's include directory has CUB in it.
+    find_path(CUB_INCLUDE_DIR
+      NAMES cub/cub.cuh
+      PATHS
+        ${CUDAToolkit_INCLUDE_DIRS}
+        /usr/include
+        /usr/local/include
+      DOC "Path to CUB include directory."
+    )
+    message(STATUS "Discovered CUB_INCLUDE_DIR: ${CUB_INCLUDE_DIR}")
+    if (CUDAToolkit_VERSION VERSION_LESS "12.8.0")
+      message(STATUS "CUDAToolkit_VERSION 12.6.85 is known to lack ForEachInExtents.  \
+Your CUDAToolkit_VERSION is ${CUDAToolkit_VERSION}.")
+    endif()
+  endif()
+endif()
+
 # Please see Kokkos' CMake instructions:
 #
 # https://kokkos.org/kokkos-core-wiki/get-started/integrating-kokkos-into-your-cmake-project.html
@@ -115,6 +100,9 @@ endif()
 # then set the CMake variable Kokkos_ROOT to the path
 # of your Kokkos installation.  Otherwise, CMake will
 # attempt to download Kokkos for you.
+#
+# Users can set FETCHCONTENT_SOURCE_DIR_KOKKOS
+# to a local path to Kokkos, to override automatic downloading.
 
 FetchContent_Declare(
   Kokkos
@@ -122,6 +110,43 @@ FetchContent_Declare(
   GIT_TAG        4.6.00
 )
 FetchContent_MakeAvailable(Kokkos)
+
+#FetchContent_GetProperties(Kokkos) # this doesn't help
+message(STATUS "Kokkos_FOUND: ${Kokkos_FOUND}") # WHY IS THIS NOT DEFINED?!?!?!?!?!
+message(STATUS "Kokkos_POPULATED: ${Kokkos_POPULATED}") # WHY IS THIS NOT DEFINED?!?!?!?!?!
+message(STATUS "Kokkos_SOURCE_DIR: ${Kokkos_SOURCE_DIR}")
+message(STATUS "Kokkos_BINARY_DIR: ${Kokkos_BINARY_DIR}")
+message(STATUS "Kokkos_INCLUDE_DIRS: ${Kokkos_INCLUDE_DIRS}") # this is not defined; why?
+
+# Use the mdspan version that Kokkos installed, if Kokkos was indeed installed.
+# Note that this is not a complete mdspan source tree; it just includes the headers.
+if ((DEFINED Kokkos_SOURCE_DIR) AND (EXISTS "${Kokkos_SOURCE_DIR}")) # Kokkos_POPULATED would be nice
+  set(MINIWEATHER_MDSPAN_INCLUDE "${Kokkos_SOURCE_DIR}/tpls/mdspan/include")
+  message(STATUS "Using Kokkos' mdspan headers: ${MINIWEATHER_MDSPAN_INCLUDE}")
+else()
+  FetchContent_Declare(
+    mdspan
+    GIT_REPOSITORY https://github.com/kokkos/mdspan.git
+    GIT_TAG        stable
+    FIND_PACKAGE_ARGS NAMES mdspan
+  )
+  FetchContent_MakeAvailable(mdspan)
+
+  # Add mdspan include directory
+  message(STATUS "mdspan_SOURCE_DIR: ${mdspan_SOURCE_DIR}")
+  message(STATUS "mdspan_BINARY_DIR: ${mdspan_BINARY_DIR}")
+  message(STATUS "mdspan_INCLUDE_DIRS: ${mdspan_INCLUDE_DIRS}")
+
+  set(MINIWEATHER_MDSPAN_INCLUDE "${mdspan_SOURCE_DIR}/include")
+  message(STATUS "Using FetchContent's mdspan headers: ${MINIWEATHER_MDSPAN_INCLUDE}")
+endif()
+
+# The above doesn't need to add mdspan's include directory to the build,
+# so it appears that we have to do this manually.
+#
+# mdspan_INCLUDE_DIRS is empty, so we have to set the include directory manually.
+# mdspan_BINARY_DIR does not have the header files in it.
+include_directories("${MINIWEATHER_MDSPAN_INCLUDE}")
 
 add_executable(serial miniWeather_mdspan.cpp)
 target_link_libraries(serial INTERFACE std::mdspan)
