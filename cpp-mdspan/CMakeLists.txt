@@ -1,5 +1,8 @@
 # CMake 3.17 adds FindCUDAToolkit.
-cmake_minimum_required(VERSION 3.17)
+#
+# Kokkos's build system claims that before CMake 3.20,
+# NVHPC was identified as PGI.
+cmake_minimum_required(VERSION 3.20)
 project(miniWeather-mdspan
   VERSION 0.0.1
   LANGUAGES CXX
