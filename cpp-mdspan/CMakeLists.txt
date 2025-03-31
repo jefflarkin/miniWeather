@@ -81,35 +81,30 @@ else()
   endif()
 endif()
 
-find_package(mdspan QUIET)
-if (NOT mdspan_FOUND)
-  message(STATUS "No installed mdspan found, fetching from Github")
-  FetchContent_Declare(
-    mdspan
-    GIT_REPOSITORY https://github.com/kokkos/mdspan.git
-    GIT_TAG        stable
-  )
-  FetchContent_GetProperties(mdspan)
-  if(NOT mdspan_POPULATED)
-    FetchContent_Populate(mdspan)
-    add_subdirectory(${mdspan_SOURCE_DIR} ${mdspan_BINARY_DIR} EXCLUDE_FROM_ALL)
-  endif()
-endif()
+FetchContent_Declare(
+  mdspan
+  GIT_REPOSITORY https://github.com/kokkos/mdspan.git
+  GIT_TAG        stable
+  FIND_PACKAGE_ARGS NAMES mdspan
+)
+FetchContent_MakeAvailable(mdspan)
 
 # Add mdspan include directory
-include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include" "${mdspan_SOURCE_DIR}/include" "${CUB_INCLUDE_DIR}")
+message(STATUS "mdspan_SOURCE_DIR: ${mdspan_SOURCE_DIR}")
+message(STATUS "mdspan_BINARY_DIR: ${mdspan_BINARY_DIR}")
+# mdspan_BINARY_DIR does not have the header files in it.
+include_directories("${mdspan_SOURCE_DIR}/include")
 
-if (CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")
-  include(FindOpenACC)
-  find_package(OpenACC REQUIRED)
-  if (OpenACC_FOUND)
-    message(STATUS "Found OpenACC: ${OpenACC_VERSION}")
-    message(STATUS "OpenACC_CXX_FLAGS: ${OpenACC_CXX_FLAGS}")
-    message(STATUS "OpenACC_CXX_OPTIONS: ${OpenACC_CXX_OPTIONS}")
-    #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenACC_CXX_OPTIONS}")
-  else()
-    message(FATAL_ERROR "OpenACC not found")
-  endif()
+#include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include" "${CUB_INCLUDE_DIR}")
+
+include(FindOpenACC)
+find_package(OpenACC)
+if (OpenACC_FOUND)
+  message(STATUS "Found OpenACC: ${OpenACC_VERSION}")
+  message(STATUS "OpenACC_CXX_FLAGS: ${OpenACC_CXX_FLAGS}")
+  message(STATUS "OpenACC_CXX_OPTIONS: ${OpenACC_CXX_OPTIONS}")
+else()
+  message(STATUS "OpenACC not found")
 endif()
 
 # Please see Kokkos' CMake instructions:
@@ -120,19 +115,13 @@ endif()
 # then set the CMake variable Kokkos_ROOT to the path
 # of your Kokkos installation.  Otherwise, CMake will
 # attempt to download Kokkos for you.
-find_package(Kokkos CONFIG)
-if (Kokkos_FOUND)
-  message(STATUS "Found Kokkos: ${Kokkos_DIR} (version \"${Kokkos_VERSION}\")")
-else()
-  message(STATUS "No installed Kokkos found, fetching from Github")
-  include(FetchContent)
-  FetchContent_Declare(
-    Kokkos
-    GIT_REPOSITORY https://github.com/kokkos/kokkos.git
-    GIT_TAG        4.6.00
-  )
-  FetchContent_MakeAvailable(Kokkos)
-endif()
+
+FetchContent_Declare(
+  Kokkos
+  GIT_REPOSITORY https://github.com/kokkos/kokkos.git
+  GIT_TAG        4.6.00
+)
+FetchContent_MakeAvailable(Kokkos)
 
 add_executable(serial miniWeather_mdspan.cpp)
 target_link_libraries(serial INTERFACE std::mdspan)
