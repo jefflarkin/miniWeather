@@ -86,16 +86,35 @@ using view_1d_const = md::mdspan<const double, extents_1d, md::layout_right>;
 // All dynamic array allocation happens here.
 // Deallocation other than through `delete [] ptr` would happen
 // through a custom Deleter (second template argument of `unique_ptr`).
+//
+// "auto" return type makes it easier for allocation
+// to depend on the build configuration.
 
-using alloc_3d = std::unique_ptr<double[]>;
-alloc_3d make_unique_array_3d(int X, int Y, int Z) {
+struct host_memory_space {};
+
+std::unique_ptr<double[]>
+make_unique_array_3d(host_memory_space, int X, int Y, int Z) {
   return std::make_unique<double[]>(X * Y * Z);
 }
-
-using alloc_1d = std::unique_ptr<double[]>;
-alloc_1d make_unique_array_1d(int X) {
+std::unique_ptr<double[]>
+make_unique_array_1d(host_memory_space, int X) {
   return std::make_unique<double[]>(X);
 }
+
+template<class MemorySpace>
+using alloc_3d = decltype(make_unique_array_3d(MemorySpace{}, 0, 0, 0));
+template<class MemorySpace>
+using alloc_1d = decltype(make_unique_array_1d(MemorySpace{}, 0));
+
+using default_memory_space = host_memory_space;
+
+auto make_unique_array_3d(int X, int Y, int Z) {
+  return make_unique_array_3d(default_memory_space{}, X, Y, Z);
+}
+auto make_unique_array_1d(int X) {
+  return make_unique_array_1d(default_memory_space{}, X);
+}
+
 
 // Variables that are set once in init and remain read-only throughout the simulation.
 struct global_const_scalars {
@@ -122,17 +141,18 @@ struct global_scalars {
 };
 
 // Arrays that are allocated and filled in init and never changed after that.
+template<class MemorySpace>
 class global_const_arrays {
 public:
-  global_const_arrays(int nx, int nz, int hs) :
+  global_const_arrays(MemorySpace memory_space, int nx, int nz, int hs) :
     nx_(nx),
     nz_(nz),
     hs_(hs),
-    hy_dens_cell_      (make_unique_array_1d(nz+2*hs)),
-    hy_dens_theta_cell_(make_unique_array_1d(nz+2*hs)),
-    hy_dens_int_       (make_unique_array_1d(nz+1)),
-    hy_dens_theta_int_ (make_unique_array_1d(nz+1)),
-    hy_pressure_int_   (make_unique_array_1d(nz+1))
+    hy_dens_cell_      (make_unique_array_1d(memory_space, nz+2*hs)),
+    hy_dens_theta_cell_(make_unique_array_1d(memory_space, nz+2*hs)),
+    hy_dens_int_       (make_unique_array_1d(memory_space, nz+1)),
+    hy_dens_theta_int_ (make_unique_array_1d(memory_space, nz+1)),
+    hy_pressure_int_   (make_unique_array_1d(memory_space, nz+1))
   {}
 
   // Const views exist for all use after init.
@@ -171,11 +191,11 @@ public:
 
 private:
   int nx_, nz_, hs_;
-  alloc_1d hy_dens_cell_;       //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
-  alloc_1d hy_dens_theta_cell_; //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
-  alloc_1d hy_dens_int_;        //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
-  alloc_1d hy_dens_theta_int_;  //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
-  alloc_1d hy_pressure_int_;    //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
+  alloc_1d<MemorySpace> hy_dens_cell_;       //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
+  alloc_1d<MemorySpace> hy_dens_theta_cell_; //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
+  alloc_1d<MemorySpace> hy_dens_int_;        //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
+  alloc_1d<MemorySpace> hy_dens_theta_int_;  //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
+  alloc_1d<MemorySpace> hy_pressure_int_;    //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
 };
 
 // Arrays that are allocated in init and updated throughout the simulation.
@@ -184,16 +204,17 @@ private:
 // Respecting that also avoids divergence from the Python version.
 // This means that the mdspan must be layout_right; the intent appears
 // to be for C code to use row-major storage, but with Fortran ordering.
+template<class MemorySpace>
 class global_arrays {
 public:
-  global_arrays(int nx, int nz, int hs) :
+  global_arrays(MemorySpace memory_space, int nx, int nz, int hs) :
     nx_(nx),
     nz_(nz),
     hs_(hs),
-    state_    (make_unique_array_3d(NUM_VARS, nz+2*hs, nx+2*hs)),
-    state_tmp_(make_unique_array_3d(NUM_VARS, nz+2*hs, nx+2*hs)),
-    flux_     (make_unique_array_3d(NUM_VARS, nz+1, nx+1)),
-    tend_     (make_unique_array_3d(NUM_VARS, nz, nx))
+    state_    (make_unique_array_3d(memory_space, NUM_VARS, nz+2*hs, nx+2*hs)),
+    state_tmp_(make_unique_array_3d(memory_space, NUM_VARS, nz+2*hs, nx+2*hs)),
+    flux_     (make_unique_array_3d(memory_space, NUM_VARS, nz+1, nx+1)),
+    tend_     (make_unique_array_3d(memory_space, NUM_VARS, nz, nx))
   {}
 
   // The current model for member functions that get a view of an array
@@ -230,20 +251,22 @@ public:
 
 private:
   int nx_, nz_, hs_;
-  alloc_3d state_;     // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
-  alloc_3d state_tmp_; // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
-  alloc_3d flux_;      // Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
-  alloc_3d tend_;      // Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
+  alloc_3d<MemorySpace> state_;     // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
+  alloc_3d<MemorySpace> state_tmp_; // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
+  alloc_3d<MemorySpace> flux_;      // Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
+  alloc_3d<MemorySpace> tend_;      // Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
 };
 
+template<class MemorySpace>
 struct init_result {
   global_const_scalars const_scalars;
   global_scalars scalars;
-  global_const_arrays const_arrays;
-  global_arrays arrays;
+  global_const_arrays<MemorySpace> const_arrays;
+  global_arrays<MemorySpace> arrays;
 };
 
-init_result init(int *argc , char ***argv);
+template<class MemorySpace>
+init_result<MemorySpace> init(MemorySpace memory_space, int *argc , char ***argv);
 
 void finalize();
 
@@ -282,49 +305,60 @@ r_t_pair hydro_const_bvfreq(double z, double bv_freq0);
 double sample_ellipse_cosine(double x, double z, double amp, double x0, double z0,
                              double xrad, double zrad);
 
+template<class MemorySpace>
 void output(view_3d_const state,
   const global_const_scalars& const_scalars,
-  const global_const_arrays& const_arrays,
+  const global_const_arrays<MemorySpace>& const_arrays,
   global_scalars& scalars);
 void ncwrap(int ierr, int line);
+template<class MemorySpace>
 void perform_timestep(view_3d state, view_3d state_tmp,
                       view_3d flux, view_3d tend,
                       const global_const_scalars& c_scalars,
-                      const global_const_arrays& c_arrays,
+                      const global_const_arrays<MemorySpace>& c_arrays,
                       global_scalars& scalars);
+template<class MemorySpace>
 void semi_discrete_step(view_3d_const state_init,
                         view_3d state_forcing,
                         view_3d state_out,
                         double dt /* not scalars.dt */,
                         direction dir, view_3d flux, view_3d tend,
                         const global_const_scalars& scalars,
-                        const global_const_arrays& arrays);
+                        const global_const_arrays<MemorySpace>& arrays);
+template<class MemorySpace>
 void compute_tendencies_x(view_3d_const state,
   view_3d flux, view_3d tend, double dt,
   const global_const_scalars& scalars,
-  const global_const_arrays& arrays);
+  const global_const_arrays<MemorySpace>& arrays);
+template<class MemorySpace>
 void compute_tendencies_z(view_3d_const state,
   view_3d flux, view_3d tend, double dt,
   const global_const_scalars& scalars,
-  const global_const_arrays& arrays);
+  const global_const_arrays<MemorySpace>& arrays);
+template<class MemorySpace>
 void set_halo_values_x(view_3d state,
-  const global_const_scalars& scalars, const global_const_arrays& arrays);
+  const global_const_scalars& scalars,
+  const global_const_arrays<MemorySpace>& arrays);
+template<class MemorySpace>
 void set_halo_values_z(view_3d state,
-  const global_const_scalars& scalars, const global_const_arrays& arrays);
+  const global_const_scalars& scalars,
+  const global_const_arrays<MemorySpace>& arrays);
 
 struct reduction_result {
   double mass;
   double te;
 };
+template<class MemorySpace>
 reduction_result reductions(view_3d_const state,
   const global_const_scalars& const_scalars,
-  const global_const_arrays& const_arrays);
+  const global_const_arrays<MemorySpace>& const_arrays);
 
 ///////////////////////////////////////////////////////////////////////////////////////
 // THE MAIN PROGRAM STARTS HERE
 ///////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
-  auto [const_scalars, scalars, const_arrays, arrays] = init( &argc , &argv );
+  auto memory_space = default_memory_space{};
+  auto [const_scalars, scalars, const_arrays, arrays] = init(memory_space, &argc , &argv );
 
   //Initial reductions for mass, kinetic energy, and total energy.
   //
@@ -396,10 +430,11 @@ int main(int argc, char **argv) {
 // q**    = q[n] + dt/2 * rhs(q*  )
 // q[n+1] = q[n] + dt/1 * rhs(q** )
 //
+template<class MemorySpace>
 void perform_timestep(view_3d state, view_3d state_tmp,
                       view_3d flux, view_3d tend,
                       const global_const_scalars& c_scalars,
-                      const global_const_arrays& c_arrays,
+                      const global_const_arrays<MemorySpace>& c_arrays,
                       global_scalars& scalars)
 {
   const double dt = scalars.dt;
@@ -434,13 +469,14 @@ void perform_timestep(view_3d state, view_3d state_tmp,
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing,
 //and stores the result in state_out
+template<class MemorySpace>
 void semi_discrete_step(view_3d_const state_init,
                         view_3d state_forcing,
                         view_3d state_out,
                         double dt /* not scalars.dt */,
                         direction dir, view_3d flux, view_3d tend,
                         const global_const_scalars& scalars,
-                        const global_const_arrays& arrays)
+                        const global_const_arrays<MemorySpace>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -488,10 +524,11 @@ void semi_discrete_step(view_3d_const state_init,
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
+template<class MemorySpace>
 void compute_tendencies_x(view_3d_const state,
   view_3d flux, view_3d tend, double dt,
   const global_const_scalars& scalars,
-  const global_const_arrays& arrays)
+  const global_const_arrays<MemorySpace>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -559,10 +596,11 @@ void compute_tendencies_x(view_3d_const state,
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
+template<class MemorySpace>
 void compute_tendencies_z(view_3d_const state,
   view_3d flux, view_3d tend, double dt,
   const global_const_scalars& scalars,
-  const global_const_arrays& arrays)
+  const global_const_arrays<MemorySpace>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -638,8 +676,10 @@ void compute_tendencies_z(view_3d_const state,
 
 
 //Set this MPI task's halo values in the x-direction. This routine will require MPI
+template<class MemorySpace>
 void set_halo_values_x(view_3d state,
-  const global_const_scalars& scalars, const global_const_arrays& arrays)
+  const global_const_scalars& scalars,
+  const global_const_arrays<MemorySpace>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -687,8 +727,10 @@ void set_halo_values_x(view_3d state,
 
 //Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
 //decomposition in the vertical direction
+template<class MemorySpace>
 void set_halo_values_z(view_3d state,
-  const global_const_scalars& scalars, const global_const_arrays& arrays)
+  const global_const_scalars& scalars,
+  const global_const_arrays<MemorySpace>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -719,7 +761,8 @@ void set_halo_values_z(view_3d state,
   }
 }
 
-init_result init( int *argc , char ***argv ) {
+template<class MemorySpace>
+init_result<MemorySpace> init(MemorySpace memory_space, int *argc , char ***argv ) {
   (void) MPI_Init(argc,argv);
 
   /////////////////////////////////////////////////////////////
@@ -746,7 +789,7 @@ init_result init( int *argc , char ***argv ) {
   int right_rank = 0;
   bool mainproc = (myrank == 0);
 
-  global_arrays gl_arrs(nx, nz, hs);
+  global_arrays gl_arrs(memory_space, nx, nz, hs);
   auto state = gl_arrs.state();
   auto state_tmp = gl_arrs.state_tmp();
   auto flux = gl_arrs.flux();
@@ -796,7 +839,7 @@ init_result init( int *argc , char ***argv ) {
     }
   }
 
-  global_const_arrays gl_const_arrs(nx, nz, hs);
+  global_const_arrays gl_const_arrs(memory_space, nx, nz, hs);
   // Get nonconst views, so we can fill them in below.
   auto hy_dens_cell       = gl_const_arrs.hy_dens_cell();
   auto hy_dens_theta_cell = gl_const_arrs.hy_dens_theta_cell();
@@ -994,9 +1037,10 @@ double sample_ellipse_cosine( double x , double z , double amp , double x0 , dou
 //Output the fluid state (state) to a NetCDF file at a given elapsed model time (etime)
 //The file I/O uses parallel-netcdf, the only external library required for this mini-app.
 //If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
+template<class MemorySpace>
 void output(view_3d_const state,
   const global_const_scalars& const_scalars,
-  const global_const_arrays& const_arrays,
+  const global_const_arrays<MemorySpace>& const_arrays,
   global_scalars& scalars)
 {
   const int nx = const_scalars.nx;
@@ -1129,9 +1173,10 @@ void finalize() {
 
 
 //Compute reduced quantities for error checking without resorting to the "ncdiff" tool
+template<class MemorySpace>
 reduction_result reductions(view_3d_const state,
   const global_const_scalars& const_scalars,
-  const global_const_arrays& const_arrays)
+  const global_const_arrays<MemorySpace>& const_arrays)
 {
   reduction_result result{0.0, 0.0};
   const int nx = const_scalars.nx;
