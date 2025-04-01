@@ -111,18 +111,26 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(Kokkos)
 
-#FetchContent_GetProperties(Kokkos) # this doesn't help
-message(STATUS "Kokkos_FOUND: ${Kokkos_FOUND}") # WHY IS THIS NOT DEFINED?!?!?!?!?!
-message(STATUS "Kokkos_POPULATED: ${Kokkos_POPULATED}") # WHY IS THIS NOT DEFINED?!?!?!?!?!
+# The above defines kokkos_POPULATED (lower-case name), but NOT Kokkos_POPULATED.
+if (NOT kokkos_POPULATED)
+  message(FATAL_ERROR "Kokkos was not found")
+endif()
 message(STATUS "Kokkos_SOURCE_DIR: ${Kokkos_SOURCE_DIR}")
 message(STATUS "Kokkos_BINARY_DIR: ${Kokkos_BINARY_DIR}")
-message(STATUS "Kokkos_INCLUDE_DIRS: ${Kokkos_INCLUDE_DIRS}") # this is not defined; why?
+#message(STATUS "Kokkos_INCLUDE_DIRS: ${Kokkos_INCLUDE_DIRS}") # this is not defined; why?
+message(STATUS "kokkos_SOURCE_DIR: ${kokkos_SOURCE_DIR}")
+message(STATUS "kokkos_BINARY_DIR: ${kokkos_BINARY_DIR}")
+message(STATUS "kokkos_INCLUDE_DIRS: ${kokkos_INCLUDE_DIRS}")
 
 # Use the mdspan version that Kokkos installed, if Kokkos was indeed installed.
 # Note that this is not a complete mdspan source tree; it just includes the headers.
-if ((DEFINED Kokkos_SOURCE_DIR) AND (EXISTS "${Kokkos_SOURCE_DIR}")) # Kokkos_POPULATED would be nice
+
+#if ((DEFINED Kokkos_SOURCE_DIR) AND (EXISTS "${Kokkos_SOURCE_DIR}"))
+if (kokkos_POPULATED)
   set(MINIWEATHER_MDSPAN_INCLUDE "${Kokkos_SOURCE_DIR}/tpls/mdspan/include")
   message(STATUS "Using Kokkos' mdspan headers: ${MINIWEATHER_MDSPAN_INCLUDE}")
+  # Don't use target_link_libraries in this case.
+  include_directories("${MINIWEATHER_MDSPAN_INCLUDE}")
 else()
   FetchContent_Declare(
     mdspan
@@ -135,10 +143,11 @@ else()
   # Add mdspan include directory
   message(STATUS "mdspan_SOURCE_DIR: ${mdspan_SOURCE_DIR}")
   message(STATUS "mdspan_BINARY_DIR: ${mdspan_BINARY_DIR}")
-  message(STATUS "mdspan_INCLUDE_DIRS: ${mdspan_INCLUDE_DIRS}")
 
   set(MINIWEATHER_MDSPAN_INCLUDE "${mdspan_SOURCE_DIR}/include")
   message(STATUS "Using FetchContent's mdspan headers: ${MINIWEATHER_MDSPAN_INCLUDE}")
+  # Don't use include_directories here; target_link_libraries
+  # (see below) will get mdspan's include directory just fine.
 endif()
 
 # The above doesn't need to add mdspan's include directory to the build,
@@ -146,10 +155,12 @@ endif()
 #
 # mdspan_INCLUDE_DIRS is empty, so we have to set the include directory manually.
 # mdspan_BINARY_DIR does not have the header files in it.
-include_directories("${MINIWEATHER_MDSPAN_INCLUDE}")
 
 add_executable(serial miniWeather_mdspan.cpp)
-target_link_libraries(serial INTERFACE std::mdspan)
+# We can't do this if mdspan wasn't found via FetchContent or find_package.
+if (NOT kokkos_POPULATED)
+  target_link_libraries(serial PRIVATE std::mdspan)
+endif()
 target_compile_options(serial PRIVATE
   $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
     -Wall>
@@ -157,10 +168,10 @@ target_compile_options(serial PRIVATE
     /W4>
 )
 
-if (Kokkos_FOUND)
+if (kokkos_POPULATED)
   add_executable(serial_kokkos miniWeather_mdspan.cpp)
-  target_link_libraries(serial_kokkos INTERFACE std::mdspan)
   target_link_libraries(serial_kokkos PRIVATE Kokkos::kokkos)
+  # We got mdspan from Kokkos.
   target_compile_options(serial_kokkos PRIVATE
     $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
       -Wall>
@@ -171,7 +182,9 @@ endif()
 
 if (OpenACC_FOUND)
   add_executable(serial_openacc miniWeather_mdspan.cpp)
-  target_link_libraries(serial_openacc INTERFACE std::mdspan)
+  if (NOT kokkos_POPULATED)
+    target_link_libraries(serial_openacc PRIVATE std::mdspan)
+  endif()
   target_link_libraries(serial_openacc PRIVATE OpenACC::OpenACC_CXX)
   target_compile_options(serial_openacc PRIVATE
     $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
@@ -182,7 +195,9 @@ if (OpenACC_FOUND)
 endif()
 
 add_executable(test_unique_mdarray test_unique_mdarray.cpp)
-target_link_libraries(test_unique_mdarray INTERFACE std::mdspan)
+if (NOT kokkos_POPULATED)
+  target_link_libraries(test_unique_mdarray PRIVATE std::mdspan)
+endif()
 target_compile_options(test_unique_mdarray PRIVATE
   $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
     -Wall>
