@@ -2,7 +2,9 @@
 #
 # Kokkos's build system claims that before CMake 3.20,
 # NVHPC was identified as PGI.
-cmake_minimum_required(VERSION 3.20)
+#
+# FetchContent_MakeAvailable gets new features in CMake 3.24.
+cmake_minimum_required(VERSION 3.24)
 project(miniWeather-mdspan
   VERSION 0.0.1
   LANGUAGES CXX
@@ -150,51 +152,9 @@ else()
   # (see below) will get mdspan's include directory just fine.
 endif()
 
-# The above doesn't need to add mdspan's include directory to the build,
-# so it appears that we have to do this manually.
-#
-# mdspan_INCLUDE_DIRS is empty, so we have to set the include directory manually.
-# mdspan_BINARY_DIR does not have the header files in it.
-
-add_executable(serial miniWeather_mdspan.cpp)
-# We can't do this if mdspan wasn't found via FetchContent or find_package.
-if (NOT kokkos_POPULATED)
-  target_link_libraries(serial PRIVATE std::mdspan)
-endif()
-target_compile_options(serial PRIVATE
-  $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
-    -Wall>
-  $<$<CXX_COMPILER_ID:MSVC>:
-    /W4>
-)
-
-if (kokkos_POPULATED)
-  add_executable(serial_kokkos miniWeather_mdspan.cpp)
-  target_link_libraries(serial_kokkos PRIVATE Kokkos::kokkos)
-  # We got mdspan from Kokkos.
-  target_compile_options(serial_kokkos PRIVATE
-    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
-      -Wall>
-    $<$<CXX_COMPILER_ID:MSVC>:
-      /W4>
-  )
-endif()
-
-if (OpenACC_FOUND)
-  add_executable(serial_openacc miniWeather_mdspan.cpp)
-  if (NOT kokkos_POPULATED)
-    target_link_libraries(serial_openacc PRIVATE std::mdspan)
-  endif()
-  target_link_libraries(serial_openacc PRIVATE OpenACC::OpenACC_CXX)
-  target_compile_options(serial_openacc PRIVATE
-    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
-      -Wall>
-    $<$<CXX_COMPILER_ID:MSVC>:
-      /W4>
-  )
-endif()
-
 add_executable(test_unique_mdarray test_unique_mdarray.cpp)
+# If building with Kokkos, we've already added the mdspan headers
+# to the include path (see above).
 if (NOT kokkos_POPULATED)
   target_link_libraries(test_unique_mdarray PRIVATE std::mdspan)
 endif()
@@ -204,5 +164,53 @@ target_compile_options(test_unique_mdarray PRIVATE
   $<$<CXX_COMPILER_ID:MSVC>:
     /W4>
 )
+
+add_executable(miniWeather_serial miniWeather_mdspan.cpp miniWeather_common.cpp)
+target_include_directories(miniWeather_serial PRIVATE "${PROJECT_SOURCE_DIR}")
+
+# If building with Kokkos, we've already added the mdspan headers
+# to the include path (see above).
+if (NOT kokkos_POPULATED)
+  target_link_libraries(miniWeather_serial PRIVATE std::mdspan)
+endif()
+target_compile_options(miniWeather_serial PRIVATE
+  $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+    -Wall>
+  $<$<CXX_COMPILER_ID:MSVC>:
+    /W4>
+)
+
+if (kokkos_POPULATED)
+  add_executable(miniWeather_kokkos miniWeather_mdspan.cpp miniWeather_common.cpp)
+  target_include_directories(miniWeather_kokkos PRIVATE "${PROJECT_SOURCE_DIR}")
+
+  target_link_libraries(miniWeather_kokkos PRIVATE Kokkos::kokkos)
+  # We got mdspan from Kokkos.
+  target_compile_options(miniWeather_kokkos PRIVATE
+    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+      -Wall>
+    $<$<CXX_COMPILER_ID:MSVC>:
+      /W4>
+  )
+endif()
+
+if (OpenACC_FOUND)
+  add_executable(miniWeather_openacc miniWeather_mdspan.cpp miniWeather_common.cpp)
+  target_include_directories(miniWeather_openacc PRIVATE "${PROJECT_SOURCE_DIR}")
+
+  # If building with Kokkos, we've already added the mdspan headers
+  # to the include path (see above).
+  if (NOT kokkos_POPULATED)
+    target_link_libraries(miniWeather_openacc PRIVATE std::mdspan)
+  endif()
+  target_link_libraries(miniWeather_openacc PRIVATE OpenACC::OpenACC_CXX)
+  target_compile_options(miniWeather_openacc PRIVATE
+    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+      -Wall>
+    $<$<CXX_COMPILER_ID:MSVC>:
+      /W4>
+  )
+endif()
+
 
 
