@@ -8,14 +8,26 @@
 
 #include "miniWeather_common.hpp"
 #include "miniWeather_output.hpp"
-#include "miniWeather_serial.hpp"
+
+#if defined(MINIWEATHER_KOKKOS)
+#  include "miniWeather_kokkos.hpp"
+#else
+#  include "miniWeather_serial.hpp"
+#endif
+
+// This needs to go after the above (execution policy - specific) headers.
+#include "miniWeather_generic_algs.hpp"
 
 auto default_memory_space() {
   return host_memory_space{};
 }
 
 auto default_execution_policy() {
+#if defined(MINIWEATHER_KOKKOS)
+  return kokkos_execution_policy{};
+#else
   return host_serial_execution_policy{};
+#endif
 }
 
 // Intra-(MPI-process) parallelization needs to happen in the following functions.

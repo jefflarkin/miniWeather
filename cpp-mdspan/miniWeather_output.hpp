@@ -3,6 +3,8 @@
 #include "miniWeather_common.hpp"
 #include "pnetcdf.h"
 
+#define MINIWEATHER_ONLY_OUTPUT_THETA 1
+
 //Error reporting routine for the PNetCDF I/O
 inline void ncwrap( int ierr , int line ) {
   if (ierr != NC_NOERR) {
@@ -15,9 +17,9 @@ inline void ncwrap( int ierr , int line ) {
 //Output the fluid state (state) to a NetCDF file at a given elapsed model time (etime)
 //The file I/O uses parallel-netcdf, the only external library required for this mini-app.
 //If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
-template<class MemorySpace>
+template<class ExecutionPolicy, class MemorySpace>
 void output(
-  host_serial_execution_policy exec_policy,
+  ExecutionPolicy exec_policy, // make this generic for now
   view_3d_const state,
   const global_const_scalars& const_scalars,
   const global_const_arrays<MemorySpace>& const_arrays,

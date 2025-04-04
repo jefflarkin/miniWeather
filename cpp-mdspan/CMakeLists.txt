@@ -185,6 +185,7 @@ if (kokkos_POPULATED)
   target_include_directories(miniWeather_kokkos PRIVATE "${PROJECT_SOURCE_DIR}")
 
   target_link_libraries(miniWeather_kokkos PRIVATE Kokkos::kokkos)
+  target_compile_definitions(miniWeather_kokkos PRIVATE MINIWEATHER_KOKKOS)
   # We got mdspan from Kokkos.
   target_compile_options(miniWeather_kokkos PRIVATE
     $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
