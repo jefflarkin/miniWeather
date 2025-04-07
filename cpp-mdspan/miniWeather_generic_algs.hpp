@@ -1,6 +1,9 @@
 #pragma once
 
 #include "miniWeather_common.hpp"
+#if defined(MINIWEATHER_KOKKOS)
+#  include "Kokkos_Core.hpp"
+#endif
 
 // Perform a single time step.
 // Time steps are dimensionally split and
@@ -87,7 +90,9 @@ init_result<MemorySpace> init(
   int *argc , char ***argv)
 {
   (void) MPI_Init(argc,argv);
-
+#if defined(MINIWEATHER_KOKKOS)
+  Kokkos::initialize(*argc, *argv);
+#endif
   /////////////////////////////////////////////////////////////
   // BEGIN MPI DUMMY SECTION
   // TODO: (1) GET NUMBER OF MPI RANKS
@@ -205,6 +210,3 @@ reduction_result reductions(
     .te = glob[1]
   };
 }
-
-
-

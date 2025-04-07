@@ -106,6 +106,9 @@ endif()
 # Users can set FETCHCONTENT_SOURCE_DIR_KOKKOS
 # to a local path to Kokkos, to override automatic downloading.
 
+set(Kokkos_ENABLE_SERIAL ON CACHE INTERNAL "")
+set(Kokkos_ENABLE_OPENACC ON CACHE INTERNAL "")
+
 FetchContent_Declare(
   Kokkos
   GIT_REPOSITORY https://github.com/kokkos/kokkos.git
@@ -181,13 +184,36 @@ target_compile_options(miniWeather_serial PRIVATE
 )
 
 if (kokkos_POPULATED)
-  add_executable(miniWeather_kokkos miniWeather_mdspan.cpp miniWeather_common.cpp)
-  target_include_directories(miniWeather_kokkos PRIVATE "${PROJECT_SOURCE_DIR}")
+  add_executable(miniWeather_kokkos_serial miniWeather_mdspan.cpp miniWeather_common.cpp)
+  target_include_directories(miniWeather_kokkos_serial PRIVATE "${PROJECT_SOURCE_DIR}")
 
-  target_link_libraries(miniWeather_kokkos PRIVATE Kokkos::kokkos)
-  target_compile_definitions(miniWeather_kokkos PRIVATE MINIWEATHER_KOKKOS)
+  target_link_libraries(miniWeather_kokkos_serial PRIVATE Kokkos::kokkos)
+  target_compile_definitions(miniWeather_kokkos_serial PRIVATE MINIWEATHER_KOKKOS)
+  target_compile_definitions(miniWeather_kokkos_serial PRIVATE MINIWEATHER_KOKKOS_SERIAL)
+
   # We got mdspan from Kokkos.
-  target_compile_options(miniWeather_kokkos PRIVATE
+  target_compile_options(miniWeather_kokkos_serial PRIVATE
+    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+      -Wall>
+    $<$<CXX_COMPILER_ID:MSVC>:
+      /W4>
+  )
+endif()
+
+# FIXME (mfh 2025/04/04) Figure out how to pass OpenACC flags to Kokkos.
+if (kokkos_POPULATED AND OpenACC_FOUND)
+  set(Kokkos_ENABLE_OPENACC ON)
+
+  add_executable(miniWeather_kokkos_openacc miniWeather_mdspan.cpp miniWeather_common.cpp)
+  target_include_directories(miniWeather_kokkos_openacc PRIVATE "${PROJECT_SOURCE_DIR}")
+
+  target_link_libraries(miniWeather_kokkos_openacc PRIVATE Kokkos::kokkos)
+  target_compile_definitions(miniWeather_kokkos_openacc PRIVATE MINIWEATHER_KOKKOS)
+  target_compile_definitions(miniWeather_kokkos_openacc PRIVATE MINIWEATHER_KOKKOS_OPENACC)
+
+  # We got mdspan from Kokkos.
+  target_link_libraries(miniWeather_kokkos_openacc PRIVATE OpenACC::OpenACC_CXX)
+  target_compile_options(miniWeather_kokkos_openacc PRIVATE
     $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
       -Wall>
     $<$<CXX_COMPILER_ID:MSVC>:

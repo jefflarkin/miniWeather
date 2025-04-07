@@ -1,9 +1,30 @@
 #pragma once
 
 #include "miniWeather_common.hpp"
-#include <Kokkos_Core.hpp>
+#include "Kokkos_Core.hpp"
+#include "cuda/std/array"
 
-using kokkos_execution_policy = Kokkos::DefaultExecutionSpace;
+#if defined(MINIWEATHER_KOKKOS_OPENACC)
+#  if ! defined(KOKKOS_ENABLE_OPENACC)
+#    error "Kokkos OpenACC is not enabled"
+#  endif
+
+// Users aren't allowed to include OpenACC/Kokkos_OpenACC.hpp directly.
+//#include "OpenACC/Kokkos_OpenACC.hpp"
+using kokkos_execution_policy = Kokkos::Experimental::OpenACC;
+
+#elif defined(MINIWEATHER_KOKKOS_SERIAL)
+#  if ! defined(KOKKOS_ENABLE_SERIAL)
+#    error "Kokkos Serial is not enabled"
+#  endif
+
+// Users aren't allowed to include Serial/Kokkos_Serial.hpp directly.
+//#include "Serial/Kokkos_Serial.hpp"
+using kokkos_execution_policy = Kokkos::Serial;
+
+#else
+#  error "No Kokkos execution policy defined"
+#endif
 
 template<int MyRank>
 using md_range_policy = Kokkos::MDRangePolicy<
@@ -287,6 +308,19 @@ void initialize_cell_averaged_fluid_state(
     "initialize_cell_averaged_fluid_state",
     md_range_policy<2>(exec_policy, {0, 0}, {nz + 2*hs, nx + 2*hs}),
     KOKKOS_LAMBDA(int k, int i) {
+      // OpenACC doesn't support static arrays, even if they are constexpr.
+      constexpr int nqpoints = 3;
+      constexpr cuda::std::array<double, nqpoints> qpoints{
+        0.112701665379258311482073460022E0,
+        0.500000000000000000000000000000E0,
+        0.887298334620741688517926539980E0
+      };
+      constexpr cuda::std::array<double, nqpoints> qweights{
+        0.277777777777777777777777777779E0,
+        0.444444444444444444444444444444E0,
+        0.277777777777777777777777777779E0
+      };
+
       //Initialize the state to zero
       for (int ll = 0; ll < NUM_VARS; ++ll) {
         state(ll, k, i) = 0.0;
@@ -332,6 +366,14 @@ void compute_hydrostatic_background_state(
     "compute_hydrostatic_background_state(1)",
     range_1d_type(exec_policy, 0, nz + 2*hs),
     KOKKOS_LAMBDA(int k) {
+      // OpenACC doesn't support static arrays, even if they are constexpr.
+      constexpr int nqpoints = 3;
+      constexpr cuda::std::array<double, nqpoints> qweights{
+        0.277777777777777777777777777779E0,
+        0.444444444444444444444444444444E0,
+        0.277777777777777777777777777779E0
+      };
+
       hy_dens_cell[k] = 0.0;
       hy_dens_theta_cell[k] = 0.0;
       for (int kk = 0; kk < nqpoints; ++kk) {
@@ -369,9 +411,28 @@ reduction_result local_reductions(
   auto hy_dens_cell = const_arrays.hy_dens_cell();
   auto hy_dens_theta_cell = const_arrays.hy_dens_theta_cell();
 
+  // Kokkos doesn't currently implement parallel_reduce(MDRangePolicy) for OpenACC.
+#if defined(MINIWEATHER_KOKKOS_OPENACC)
+#  if defined(KOKKOS_ENABLE_CUDA)
+  auto my_exec_policy = Kokkos::Cuda{};
+#  elif defined(KOKKOS_ENABLE_SERIAL)
+  auto my_exec_policy = Kokkos::Serial{};
+#  else
+#    error "No fall-back execution policy defined"
+#  endif
+#else
+  auto my_exec_policy = exec_policy;
+#endif 
+
+  Kokkos::MDRangePolicy<
+    std::remove_cvref_t<decltype(my_exec_policy)>,
+    Kokkos::Rank<2>,
+    Kokkos::IndexType<int>>
+  range(my_exec_policy, {0, 0}, {nz, nx});
+
   Kokkos::parallel_reduce(
     "local_reductions",
-    md_range_policy<2>(exec_policy, {0, 0}, {nz, nx}),
+    range,
     KOKKOS_LAMBDA(int k, int i, reduction_result& thread_local_result) {
       double r  =  state(ID_DENS, k+hs, i+hs) + hy_dens_cell[hs+k]; // Density
       double u  =  state(ID_UMOM, k+hs, i+hs) / r;                  // U-wind
@@ -384,7 +445,6 @@ reduction_result local_reductions(
       thread_local_result.mass += r        *dx*dz; // Accumulate domain mass
       thread_local_result.te   += (ke + ie)*dx*dz; // Accumulate domain total energy
     }, result);
-
   return result;
 }
 

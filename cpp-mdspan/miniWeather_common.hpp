@@ -20,6 +20,13 @@
 #include "mdspan/mdspan.hpp"
 #include "unique_mdarray.hpp"
 
+#if defined(MINIWEATHER_KOKKOS)
+#  include "Kokkos_Core.hpp"
+#  define MINIWEATHER_INLINE_FUNCTION KOKKOS_INLINE_FUNCTION
+#else
+#  define MINIWEATHER_INLINE_FUNCTION inline
+#endif
+
 constexpr double pi        = 3.14159265358979323846264338327;   //Pi
 constexpr double grav      = 9.8;                               //Gravitational acceleration (m / s^2)
 constexpr double cp        = 1004.;                             //Specific heat of dry air at constant pressure
@@ -251,6 +258,64 @@ struct init_result {
   global_arrays<MemorySpace> arrays;
 };
 
+struct r_t_pair {
+  double r;
+  double t;
+};
+
+// Establish hydrostatic balance using constant potential temperature
+// (thermally neutral atmosphere)
+// z is the input coordinate
+// r and t are the output background hydrostatic density and potential temperature
+MINIWEATHER_INLINE_FUNCTION
+r_t_pair hydro_const_theta(double z) {
+  const double theta0 = 300.;  //Background potential temperature
+  const double exner0 = 1.;    //Surface-level Exner pressure
+  double       p,exner,rt;
+  //Establish hydrostatic balance first using Exner pressure
+  double t = theta0;                         //Potential Temperature at z
+  exner = exner0 - grav * z / (cp * theta0); //Exner pressure at z
+  p = p0 * pow(exner,(cp/rd));               //Pressure at z
+  rt = pow((p / C0),(1. / gamm));            //rho*theta at z
+  double r = rt / t;                         //Density at z
+
+  return {r, t};
+}
+
+//Establish hydrostatic balance using constant Brunt-Vaisala frequency
+//z is the input coordinate
+//bv_freq0 is the constant Brunt-Vaisala frequency
+//r and t are the output background hydrostatic density and potential temperature
+MINIWEATHER_INLINE_FUNCTION
+r_t_pair hydro_const_bvfreq(double z, double bv_freq0) {
+  const double theta0 = 300.;  //Background potential temperature
+  const double exner0 = 1.;    //Surface-level Exner pressure
+  double       p, exner, rt;
+  double t = theta0 * exp( bv_freq0*bv_freq0 / grav * z );                                    //Pot temp at z
+  exner = exner0 - grav*grav / (cp * bv_freq0*bv_freq0) * (t - theta0) / (t * theta0); //Exner pressure at z
+  p = p0 * pow(exner,(cp/rd));                                                         //Pressure at z
+  rt = pow((p / C0), (1. / gamm));                                                  //rho*theta at z
+  double r = rt / t;                                                                          //Density at z
+
+  return {r, t};
+}
+
+//Sample from an ellipse of a specified center, radius, and amplitude at a specified location
+//x and z are input coordinates
+//amp,x0,z0,xrad,zrad are input amplitude, center, and radius of the ellipse
+MINIWEATHER_INLINE_FUNCTION
+double sample_ellipse_cosine( double x , double z , double amp , double x0 , double z0 , double xrad , double zrad ) {
+  double dist;
+  //Compute distance from bubble center
+  dist = sqrt( ((x-x0)/xrad)*((x-x0)/xrad) + ((z-z0)/zrad)*((z-z0)/zrad) ) * pi / 2.0;
+  //If the distance from bubble center is less than the radius, create a cos**2 profile
+  if (dist <= pi / 2.0) {
+    return amp * pow(cos(dist), 2.0);
+  } else {
+    return 0.;
+  }
+}
+
 struct test_case {
   double r;
   double u;
@@ -265,43 +330,71 @@ struct test_case {
 // hr and ht are output background hydrostatic density and potential temperature at that location.
 
 //This test case is initially balanced but injects fast, cold air from the left boundary near the model top
-test_case injection(double x, double z);
+MINIWEATHER_INLINE_FUNCTION
+test_case injection(double x , double z) {
+  auto [hr, ht] = hydro_const_theta(z);
+  double r = 0.0;
+  double t = 0.0;
+  double u = 0.0;
+  double w = 0.0;
+  return {r, u, w, t, hr, ht};
+}
 
 //Initialize a density current (falling cold thermal that propagates along the model bottom)
-test_case density_current(double x, double z);
+MINIWEATHER_INLINE_FUNCTION
+test_case density_current(double x , double z) {
+  auto [hr, ht] = hydro_const_theta(z);
+  double r = 0.0;
+  double t = sample_ellipse_cosine(x, z, -20.0, xlen/2, 5000.0, 4000.0, 2000.0);
+  double u = 0.0;
+  double w = 0.0;
+  return {r, u, w, t, hr, ht};
+}
 
-test_case gravity_waves(double x, double z);
+MINIWEATHER_INLINE_FUNCTION
+test_case gravity_waves(double x, double z) {
+  auto [hr, ht] = hydro_const_bvfreq(z, 0.02);
+  double r = 0.0;
+  double t = 0.0;
+  double u = 15.0;
+  double w = 0.0;
+  return {r, u, w, t, hr, ht};
+}
 
 //Rising thermal
-test_case thermal(double x, double z);
+MINIWEATHER_INLINE_FUNCTION
+test_case thermal(double x, double z) {
+  auto [hr, ht] = hydro_const_theta(z);
+  double r = 0.0;
+  double t = sample_ellipse_cosine(x, z, 3.0, xlen/2,2000.0, 2000.0, 2000.0);
+  double u = 0.0;
+  double w = 0.0;
+  return {r, u, w, t, hr, ht};
+}
 
 //Colliding thermals
-test_case collision(double x, double z);
+MINIWEATHER_INLINE_FUNCTION
+test_case collision(double x , double z) {
+  auto [hr, ht] = hydro_const_theta(z);
+  double r = 0.0;
+  double t = 0.0;
+  double u = 0.0;
+  double w = 0.0;
+  t = t + sample_ellipse_cosine(x, z,  20.0, xlen/2,2000.0, 2000.0, 2000.0);
+  t = t + sample_ellipse_cosine(x, z, -20.0, xlen/2,8000.0, 2000.0, 2000.0);
+  return {r, u, w, t, hr, ht};
+}
 
-test_case get_test_case(int data_spec, double x_, double z_);
-
-struct r_t_pair {
-  double r;
-  double t;
-};
-
-// Establish hydrostatic balance using constant potential temperature
-// (thermally neutral atmosphere)
-// z is the input coordinate
-// r and t are the output background hydrostatic density and potential temperature
-r_t_pair hydro_const_theta(double z);
-
-//Establish hydrostatic balance using constant Brunt-Vaisala frequency
-//z is the input coordinate
-//bv_freq0 is the constant Brunt-Vaisala frequency
-//r and t are the output background hydrostatic density and potential temperature
-r_t_pair hydro_const_bvfreq(double z, double bv_freq0);
-
-//Sample from an ellipse of a specified center, radius, and amplitude at a specified location
-//x and z are input coordinates
-//amp,x0,z0,xrad,zrad are input amplitude, center, and radius of the ellipse
-double sample_ellipse_cosine(double x, double z, double amp, double x0, double z0,
-                             double xrad, double zrad);
+MINIWEATHER_INLINE_FUNCTION
+test_case get_test_case(int data_spec, double x, double z) {
+  if (data_spec == DATA_SPEC_COLLISION      ) { return collision(x, z); }
+  if (data_spec == DATA_SPEC_THERMAL        ) { return thermal(x, z); }
+  if (data_spec == DATA_SPEC_GRAVITY_WAVES  ) { return gravity_waves(x, z); }
+  if (data_spec == DATA_SPEC_DENSITY_CURRENT) { return density_current(x, z); }
+  if (data_spec == DATA_SPEC_INJECTION      ) { return injection(x, z); }
+  assert(false);
+  return test_case{};
+}
 
 struct reduction_result {
   double mass;
