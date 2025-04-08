@@ -120,17 +120,10 @@ FetchContent_MakeAvailable(Kokkos)
 if (NOT kokkos_POPULATED)
   message(FATAL_ERROR "Kokkos was not found")
 endif()
-message(STATUS "Kokkos_SOURCE_DIR: ${Kokkos_SOURCE_DIR}")
-message(STATUS "Kokkos_BINARY_DIR: ${Kokkos_BINARY_DIR}")
-#message(STATUS "Kokkos_INCLUDE_DIRS: ${Kokkos_INCLUDE_DIRS}") # this is not defined; why?
-message(STATUS "kokkos_SOURCE_DIR: ${kokkos_SOURCE_DIR}")
-message(STATUS "kokkos_BINARY_DIR: ${kokkos_BINARY_DIR}")
-message(STATUS "kokkos_INCLUDE_DIRS: ${kokkos_INCLUDE_DIRS}")
 
 # Use the mdspan version that Kokkos installed, if Kokkos was indeed installed.
 # Note that this is not a complete mdspan source tree; it just includes the headers.
 
-#if ((DEFINED Kokkos_SOURCE_DIR) AND (EXISTS "${Kokkos_SOURCE_DIR}"))
 if (kokkos_POPULATED)
   set(MINIWEATHER_MDSPAN_INCLUDE "${Kokkos_SOURCE_DIR}/tpls/mdspan/include")
   message(STATUS "Using Kokkos' mdspan headers: ${MINIWEATHER_MDSPAN_INCLUDE}")
@@ -200,7 +193,6 @@ if (kokkos_POPULATED)
   )
 endif()
 
-# FIXME (mfh 2025/04/04) Figure out how to pass OpenACC flags to Kokkos.
 if (kokkos_POPULATED AND OpenACC_FOUND)
   set(Kokkos_ENABLE_OPENACC ON)
 
@@ -239,5 +231,63 @@ if (OpenACC_FOUND)
   )
 endif()
 
+# Option to enable stdpar
+set(MINIWEATHER_ENABLE_STDPAR DETECT CACHE STRING "Enable stdpar using the -stdpar flag")
 
+if (MINIWEATHER_ENABLE_STDPAR)
+  add_executable(miniWeather_stdpar_cpu miniWeather_mdspan.cpp miniWeather_common.cpp)
+  target_include_directories(miniWeather_stdpar_cpu PRIVATE "${PROJECT_SOURCE_DIR}")
 
+  # If building with Kokkos, we've already added the mdspan headers
+  # to the include path (see above).
+  if (NOT kokkos_POPULATED)
+    target_link_libraries(miniWeather_stdpar_cpu PRIVATE std::mdspan)
+  endif()
+  target_compile_options(miniWeather_stdpar_cpu PRIVATE
+    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+      -Wall>
+    $<$<CXX_COMPILER_ID:MSVC>:
+      /W4>
+  )
+  target_compile_options(miniWeather_stdpar_cpu PRIVATE "-stdpar=multicore")
+  target_link_options(miniWeather_stdpar_cpu PRIVATE "-stdpar=multicore")
+endif()
+
+if (MINIWEATHER_ENABLE_STDPAR)
+  add_executable(miniWeather_stdpar_gpu miniWeather_mdspan.cpp miniWeather_common.cpp)
+  target_include_directories(miniWeather_stdpar_gpu PRIVATE "${PROJECT_SOURCE_DIR}")
+
+  # If building with Kokkos, we've already added the mdspan headers
+  # to the include path (see above).
+  if (NOT kokkos_POPULATED)
+    target_link_libraries(miniWeather_stdpar_gpu PRIVATE std::mdspan)
+  endif()
+  target_compile_options(miniWeather_stdpar_gpu PRIVATE
+    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+      -Wall>
+    $<$<CXX_COMPILER_ID:MSVC>:
+      /W4>
+  )
+  target_compile_options(miniWeather_stdpar_gpu PRIVATE "-stdpar=gpu")
+  target_link_options(miniWeather_stdpar_gpu PRIVATE "-stdpar=gpu")
+endif()
+
+if (MINIWEATHER_ENABLE_STDPAR AND OpenACC_FOUND)
+  add_executable(miniWeather_stdpar_openacc miniWeather_mdspan.cpp miniWeather_common.cpp)
+  target_include_directories(miniWeather_stdpar_openacc PRIVATE "${PROJECT_SOURCE_DIR}")
+
+  # If building with Kokkos, we've already added the mdspan headers
+  # to the include path (see above).
+  if (NOT kokkos_POPULATED)
+    target_link_libraries(miniWeather_stdpar_openacc PRIVATE std::mdspan)
+  endif()
+  target_link_libraries(miniWeather_stdpar_openacc PRIVATE OpenACC::OpenACC_CXX)
+  target_compile_options(miniWeather_stdpar_openacc PRIVATE
+    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+      -Wall>
+    $<$<CXX_COMPILER_ID:MSVC>:
+      /W4>
+  )
+  target_compile_options(miniWeather_stdpar_openacc PRIVATE "-stdpar=gpu:acc")
+  target_link_options(miniWeather_stdpar_openacc PRIVATE "-stdpar=gpu:acc")
+endif()
