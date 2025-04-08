@@ -11,7 +11,7 @@ project(miniWeather-mdspan
 )
 include(FetchContent)
 
-message(STATUS "C++ compiler ID: ${CMAKE_CXX_COMPILER_ID}")
+message(STATUS "CMAKE_CXX_COMPILER_ID: ${CMAKE_CXX_COMPILER_ID}")
 
 # Option to override which version of the C++ Standard to use
 set(MINIWEATHER_CXX_STANDARD DETECT CACHE STRING "Override the default CXX_STANDARD")
@@ -155,7 +155,7 @@ if (NOT kokkos_POPULATED)
   target_link_libraries(test_unique_mdarray PRIVATE std::mdspan)
 endif()
 target_compile_options(test_unique_mdarray PRIVATE
-  $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+  $<$<OR:$<CXX_COMPILER_ID:NVHPC>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
     -Wall>
   $<$<CXX_COMPILER_ID:MSVC>:
     /W4>
@@ -170,7 +170,7 @@ if (NOT kokkos_POPULATED)
   target_link_libraries(miniWeather_serial PRIVATE std::mdspan)
 endif()
 target_compile_options(miniWeather_serial PRIVATE
-  $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+  $<$<OR:$<CXX_COMPILER_ID:NVHPC>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
     -Wall>
   $<$<CXX_COMPILER_ID:MSVC>:
     /W4>
@@ -186,7 +186,7 @@ if (kokkos_POPULATED)
 
   # We got mdspan from Kokkos.
   target_compile_options(miniWeather_kokkos_serial PRIVATE
-    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+    $<$<OR:$<CXX_COMPILER_ID:NVHPC>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
       -Wall>
     $<$<CXX_COMPILER_ID:MSVC>:
       /W4>
@@ -206,7 +206,7 @@ if (kokkos_POPULATED AND OpenACC_FOUND)
   # We got mdspan from Kokkos.
   target_link_libraries(miniWeather_kokkos_openacc PRIVATE OpenACC::OpenACC_CXX)
   target_compile_options(miniWeather_kokkos_openacc PRIVATE
-    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+    $<$<OR:$<CXX_COMPILER_ID:NVHPC>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
       -Wall>
     $<$<CXX_COMPILER_ID:MSVC>:
       /W4>
@@ -224,7 +224,7 @@ if (OpenACC_FOUND)
   endif()
   target_link_libraries(miniWeather_openacc PRIVATE OpenACC::OpenACC_CXX)
   target_compile_options(miniWeather_openacc PRIVATE
-    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+    $<$<OR:$<CXX_COMPILER_ID:NVHPC>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
       -Wall>
     $<$<CXX_COMPILER_ID:MSVC>:
       /W4>
@@ -244,7 +244,7 @@ if (MINIWEATHER_ENABLE_STDPAR)
     target_link_libraries(miniWeather_stdpar_cpu PRIVATE std::mdspan)
   endif()
   target_compile_options(miniWeather_stdpar_cpu PRIVATE
-    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+    $<$<OR:$<CXX_COMPILER_ID:NVHPC>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
       -Wall>
     $<$<CXX_COMPILER_ID:MSVC>:
       /W4>
@@ -263,7 +263,7 @@ if (MINIWEATHER_ENABLE_STDPAR)
     target_link_libraries(miniWeather_stdpar_gpu PRIVATE std::mdspan)
   endif()
   target_compile_options(miniWeather_stdpar_gpu PRIVATE
-    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+    $<$<OR:$<CXX_COMPILER_ID:NVHPC>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
       -Wall>
     $<$<CXX_COMPILER_ID:MSVC>:
       /W4>
@@ -283,7 +283,7 @@ if (MINIWEATHER_ENABLE_STDPAR AND OpenACC_FOUND)
   endif()
   target_link_libraries(miniWeather_stdpar_openacc PRIVATE OpenACC::OpenACC_CXX)
   target_compile_options(miniWeather_stdpar_openacc PRIVATE
-    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+    $<$<OR:$<CXX_COMPILER_ID:NVHPC>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
       -Wall>
     $<$<CXX_COMPILER_ID:MSVC>:
       /W4>
