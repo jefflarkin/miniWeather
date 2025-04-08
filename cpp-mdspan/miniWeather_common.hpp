@@ -14,9 +14,6 @@
 #include <chrono>
 #include <mpi.h>
 
-// nvc++ in 25.1 doesn't like including this header.
-//#include "cub/cub.cuh"
-
 #include "mdspan/mdspan.hpp"
 #include "unique_mdarray.hpp"
 
@@ -88,26 +85,117 @@ using extents_1d =    md::extents<int, md::dynamic_extent>; // a.k.a. dims<1, in
 using view_1d =       md::mdspan<double,       extents_1d, md::layout_right>;
 using view_1d_const = md::mdspan<const double, extents_1d, md::layout_right>;
 
-// All dynamic array allocation happens here.
-// Deallocation other than through `delete [] ptr` would happen
-// through a custom Deleter (second template argument of `unique_ptr`).
-//
-// "auto" return type makes it easier for allocation
-// to depend on the build configuration.
-
 struct host_memory_space {};
 struct host_serial_execution_policy {};
 
 std::unique_ptr<double[]>
-make_unique_array_3d(host_memory_space, int X, int Y, int Z);
-
+make_unique_array_3d(host_serial_execution_policy, host_memory_space, int X, int Y, int Z);
 std::unique_ptr<double[]>
-make_unique_array_1d(host_memory_space, int X);
+make_unique_array_1d(host_serial_execution_policy, host_memory_space, int X);
 
+// I don't like that I have to put this here instead of in the Kokkos-specific header.
+#if defined(MINIWEATHER_KOKKOS)
 template<class MemorySpace>
-using alloc_3d = decltype(make_unique_array_3d(MemorySpace{}, 0, 0, 0));
-template<class MemorySpace>
-using alloc_1d = decltype(make_unique_array_1d(MemorySpace{}, 0));
+  requires(Kokkos::is_memory_space_v<MemorySpace>)
+struct kokkos_deleter {
+  size_t alloc_size = 0;
+
+  void operator() (void* ptr) const {
+    MemorySpace{}.deallocate(ptr, alloc_size);
+  }
+};
+
+template<class ExecutionSpace, class MemorySpace>
+  requires(
+    Kokkos::is_execution_space_v<ExecutionSpace> &&
+    Kokkos::is_memory_space_v<MemorySpace>)
+std::unique_ptr<double[], kokkos_deleter<MemorySpace>>
+kokkos_make_unique_array_3d(ExecutionSpace exec_space,
+  MemorySpace memory_space, int X, int Y, int Z)
+{
+  using deleter_type = kokkos_deleter<MemorySpace>;
+  return std::unique_ptr<double[], deleter_type>(
+    static_cast<double*>(memory_space.allocate(exec_space, X * Y * Z)),
+    deleter_type{size_t(X) * size_t(Y) * size_t(Z)}
+  );
+}
+
+template<class ExecutionSpace, class MemorySpace>
+  requires(
+    Kokkos::is_execution_space_v<ExecutionSpace> &&
+    Kokkos::is_memory_space_v<MemorySpace>)
+std::unique_ptr<double[], kokkos_deleter<MemorySpace>>
+kokkos_make_unique_array_1d(ExecutionSpace exec_space,
+  MemorySpace memory_space, int X)
+{
+  using deleter_type = kokkos_deleter<MemorySpace>;
+  return std::unique_ptr<double[], deleter_type>(
+    static_cast<double*>(memory_space.allocate(exec_space, X)),
+    deleter_type{size_t(X)}
+  );
+}
+#endif // MINIWEATHER_KOKKOS
+
+#if defined(MINIWEATHER_KOKKOS_SERIAL)
+inline std::unique_ptr<double[], kokkos_deleter<Kokkos::HostSpace>>
+make_unique_array_3d(Kokkos::Serial exec_space,
+  Kokkos::HostSpace memory_space, int X, int Y, int Z)
+{
+  return kokkos_make_unique_array_3d(exec_space, memory_space, X, Y, Z);
+}
+
+inline std::unique_ptr<double[], kokkos_deleter<Kokkos::HostSpace>>
+make_unique_array_1d(Kokkos::Serial exec_space,
+  Kokkos::HostSpace memory_space, int X)
+{
+  return kokkos_make_unique_array_1d(exec_space, memory_space, X);
+}
+#endif // MINIWEATHER_KOKKOS_SERIAL
+
+#if defined(MINIWEATHER_KOKKOS_OPENACC)
+inline std::unique_ptr<double[], kokkos_deleter<Kokkos::Experimental::OpenACCSpace>>
+make_unique_array_3d(Kokkos::Experimental::OpenACC exec_space,
+  Kokkos::Experimental::OpenACCSpace memory_space, int X, int Y, int Z)
+{
+  return kokkos_make_unique_array_3d(exec_space, memory_space, X, Y, Z);
+}
+
+inline std::unique_ptr<double[], kokkos_deleter<Kokkos::Experimental::OpenACCSpace>>
+make_unique_array_1d(Kokkos::Experimental::OpenACC exec_space,
+  Kokkos::Experimental::OpenACCSpace memory_space, int X)
+{
+  return kokkos_make_unique_array_1d(exec_space, memory_space, X);
+}
+#endif // MINIWEATHER_KOKKOS_OPENACC
+
+// I don't like that I have to put this here instead of in the stdpar-specific header.
+#if defined(MINIWEATHER_STDPAR)
+struct stdpar_ranges_execution_policy {};
+
+inline std::unique_ptr<double[]>
+make_unique_array_3d(stdpar_ranges_execution_policy exec_space,
+  host_memory_space memory_space, int X, int Y, int Z)
+{
+  return std::make_unique<double[]>(X * Y * Z);
+}
+
+inline std::unique_ptr<double[]>
+make_unique_array_1d(stdpar_ranges_execution_policy exec_space,
+  host_memory_space memory_space, int X)
+{
+  return std::make_unique<double[]>(X);
+}
+#endif // MINIWEATHER_STDPAR
+
+// All dynamic array allocation happens in the two functions
+// make_unique_array_3d and make_unique_array_1d.
+// Overload them for your execution space and memory space.
+// The functions take both in order to support stream-ordered allocation
+// (e.g., cudaMallocAsync).
+template<class ExecutionSpace, class MemorySpace>
+using alloc_3d = decltype(make_unique_array_3d(ExecutionSpace{}, MemorySpace{}, 0, 0, 0));
+template<class ExecutionSpace, class MemorySpace>
+using alloc_1d = decltype(make_unique_array_1d(ExecutionSpace{}, MemorySpace{}, 0));
 
 // Variables that are set once in init and remain read-only throughout the simulation.
 struct global_const_scalars {
@@ -134,18 +222,18 @@ struct global_scalars {
 };
 
 // Arrays that are allocated and filled in init and never changed after that.
-template<class MemorySpace>
+template<class ExecutionSpace, class MemorySpace>
 class global_const_arrays {
 public:
-  global_const_arrays(MemorySpace memory_space, int nx, int nz, int hs) :
+  global_const_arrays(ExecutionSpace exec_space, MemorySpace memory_space, int nx, int nz, int hs) :
     nx_(nx),
     nz_(nz),
     hs_(hs),
-    hy_dens_cell_      (make_unique_array_1d(memory_space, nz+2*hs)),
-    hy_dens_theta_cell_(make_unique_array_1d(memory_space, nz+2*hs)),
-    hy_dens_int_       (make_unique_array_1d(memory_space, nz+1)),
-    hy_dens_theta_int_ (make_unique_array_1d(memory_space, nz+1)),
-    hy_pressure_int_   (make_unique_array_1d(memory_space, nz+1))
+    hy_dens_cell_      (make_unique_array_1d(exec_space, memory_space, nz+2*hs)),
+    hy_dens_theta_cell_(make_unique_array_1d(exec_space, memory_space, nz+2*hs)),
+    hy_dens_int_       (make_unique_array_1d(exec_space, memory_space, nz+1)),
+    hy_dens_theta_int_ (make_unique_array_1d(exec_space, memory_space, nz+1)),
+    hy_pressure_int_   (make_unique_array_1d(exec_space, memory_space, nz+1))
   {}
 
   // Const views exist for all use after init.
@@ -184,11 +272,11 @@ public:
 
 private:
   int nx_, nz_, hs_;
-  alloc_1d<MemorySpace> hy_dens_cell_;       //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
-  alloc_1d<MemorySpace> hy_dens_theta_cell_; //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
-  alloc_1d<MemorySpace> hy_dens_int_;        //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
-  alloc_1d<MemorySpace> hy_dens_theta_int_;  //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
-  alloc_1d<MemorySpace> hy_pressure_int_;    //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
+  alloc_1d<ExecutionSpace, MemorySpace> hy_dens_cell_;       //hydrostatic density (vert cell avgs).   Dimensions: (1-hs:nz+hs)
+  alloc_1d<ExecutionSpace, MemorySpace> hy_dens_theta_cell_; //hydrostatic rho*t (vert cell avgs).     Dimensions: (1-hs:nz+hs)
+  alloc_1d<ExecutionSpace, MemorySpace> hy_dens_int_;        //hydrostatic density (vert cell interf). Dimensions: (1:nz+1)
+  alloc_1d<ExecutionSpace, MemorySpace> hy_dens_theta_int_;  //hydrostatic rho*t (vert cell interf).   Dimensions: (1:nz+1)
+  alloc_1d<ExecutionSpace, MemorySpace> hy_pressure_int_;    //hydrostatic press (vert cell interf).   Dimensions: (1:nz+1)
 };
 
 // Arrays that are allocated in init and updated throughout the simulation.
@@ -197,17 +285,17 @@ private:
 // Respecting that also avoids divergence from the Python version.
 // This means that the mdspan must be layout_right; the intent appears
 // to be for C code to use row-major storage, but with Fortran ordering.
-template<class MemorySpace>
+template<class ExecutionSpace, class MemorySpace>
 class global_arrays {
 public:
-  global_arrays(MemorySpace memory_space, int nx, int nz, int hs) :
+  global_arrays(ExecutionSpace exec_space, MemorySpace memory_space, int nx, int nz, int hs) :
     nx_(nx),
     nz_(nz),
     hs_(hs),
-    state_    (make_unique_array_3d(memory_space, NUM_VARS, nz+2*hs, nx+2*hs)),
-    state_tmp_(make_unique_array_3d(memory_space, NUM_VARS, nz+2*hs, nx+2*hs)),
-    flux_     (make_unique_array_3d(memory_space, NUM_VARS, nz+1, nx+1)),
-    tend_     (make_unique_array_3d(memory_space, NUM_VARS, nz, nx))
+    state_    (make_unique_array_3d(exec_space, memory_space, NUM_VARS, nz+2*hs, nx+2*hs)),
+    state_tmp_(make_unique_array_3d(exec_space, memory_space, NUM_VARS, nz+2*hs, nx+2*hs)),
+    flux_     (make_unique_array_3d(exec_space, memory_space, NUM_VARS, nz+1, nx+1)),
+    tend_     (make_unique_array_3d(exec_space, memory_space, NUM_VARS, nz, nx))
   {}
 
   // The current model for member functions that get a view of an array
@@ -244,18 +332,18 @@ public:
 
 private:
   int nx_, nz_, hs_;
-  alloc_3d<MemorySpace> state_;     // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
-  alloc_3d<MemorySpace> state_tmp_; // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
-  alloc_3d<MemorySpace> flux_;      // Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
-  alloc_3d<MemorySpace> tend_;      // Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
+  alloc_3d<ExecutionSpace, MemorySpace> state_;     // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
+  alloc_3d<ExecutionSpace, MemorySpace> state_tmp_; // Fluid state.             Dimensions: (1-hs:nx+hs,1-hs:nz+hs,NUM_VARS)
+  alloc_3d<ExecutionSpace, MemorySpace> flux_;      // Cell interface fluxes.   Dimensions: (nx+1,nz+1,NUM_VARS)
+  alloc_3d<ExecutionSpace, MemorySpace> tend_;      // Fluid state tendencies.  Dimensions: (nx,nz,NUM_VARS)
 };
 
-template<class MemorySpace>
+template<class ExecutionSpace, class MemorySpace>
 struct init_result {
   global_const_scalars const_scalars;
   global_scalars scalars;
-  global_const_arrays<MemorySpace> const_arrays;
-  global_arrays<MemorySpace> arrays;
+  global_const_arrays<ExecutionSpace, MemorySpace> const_arrays;
+  global_arrays<ExecutionSpace, MemorySpace> arrays;
 };
 
 struct r_t_pair {

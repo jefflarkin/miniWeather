@@ -1,36 +1,33 @@
 #pragma once
 
 #include "miniWeather_common.hpp"
-#include <cuda/std/array>
-#include <execution>
-#include <numeric>
-#include <ranges>
+#include "cuda/std/array"
 
-#if ! defined(__cpp_lib_ranges_cartesian_product)
-#  include "cartesian_product.hpp"
+#if defined(MINIWEATHER_CUB)
+#  include "cub/device/device_for_each.cuh"
+#  include "thrust/iterator/counting_iterator.h"
+#  include "thrust/iterator/transform_iterator.h"
+#  include "thrust/reduce.h"
+#else
+#  error "CUB is not enabled"
 #endif
 
-constexpr auto stdpar_md_range(stdpar_ranges_execution_policy, int M) {
-  return std::ranges::views::iota(0, M);
-}
+struct cub_execution_policy {
+  cudaStream_t stream = {};
+};
 
-constexpr auto stdpar_md_range(stdpar_ranges_execution_policy, int M, int N) {
-  return std::ranges::views::cartesian_product(std::ranges::views::iota(0, M), std::ranges::views::iota(0, N));
-}
-
-constexpr auto stdpar_md_range(stdpar_ranges_execution_policy, int M, int N, int P) {
-  return std::ranges::views::cartesian_product(std::ranges::views::iota(0, M), std::ranges::views::iota(0, N), std::ranges::views::iota(0, P));
+cub_memory_space default_memory_space(cub_execution_policy) {
+  return cub_memory_space{};
 }
 
 //Set this MPI task's halo values in the x-direction.
+template<class MemorySpace>
 void set_halo_values_x(
-  stdpar_ranges_execution_policy exec_policy,
+  cub_execution_policy exec_policy,
   view_3d state,
   const global_const_scalars& scalars,
-  const global_const_arrays<stdpar_ranges_execution_policy, host_memory_space>& arrays)
+  const global_const_arrays<MemorySpace>& arrays)
 {
-  using std::begin;
-  using std::end;
   const int nx = scalars.nx;
   const int nz = scalars.nz;
 
@@ -46,18 +43,14 @@ void set_halo_values_x(
   // DELETE THE SERIAL CODE BELOW AND REPLACE WITH MPI
   //////////////////////////////////////////////////////
 
-  {
-    auto range = stdpar_md_range(exec_policy, NUM_VARS, nz);
-    std::for_each(std::execution::par_unseq, range.begin(), range.end(),
-      [state, nx](auto&& ll_k_pair) {
-        auto [ll, k] = ll_k_pair;
-        state(ll, k+hs, 0) = state(ll, k+hs, nx+hs-2);
-        state(ll, k+hs, 1) = state(ll, k+hs, nx+hs-1);
-        state(ll, k+hs, nx+hs) = state(ll, k+hs, hs);
-        state(ll, k+hs, nx+hs+1) = state(ll, k+hs, hs+1);
-      });
-  }
-
+  cub::DeviceFor::ForEachInExtents(
+    cuda::std::extents<int, NUM_VARS, dynamic_extent>{NUM_VARS, nz},
+    [=] __device__ (int /* linear_index */, int ll, int k) {
+      state(ll, k+hs, 0) = state(ll, k+hs, nx+hs-2);
+      state(ll, k+hs, 1) = state(ll, k+hs, nx+hs-1);
+      state(ll, k+hs, nx+hs) = state(ll, k+hs, hs);
+      state(ll, k+hs, nx+hs+1) = state(ll, k+hs, hs+1);
+    }, exec_policy.stream);
   ////////////////////////////////////////////////////
 
   if (data_spec_int == DATA_SPEC_INJECTION) {
@@ -66,37 +59,36 @@ void set_halo_values_x(
       auto hy_dens_theta_cell = arrays.hy_dens_theta_cell();
       const int k_beg = scalars.k_beg;
 
-      auto range = stdpar_md_range(exec_policy, nz, hs);
-      std::for_each(std::execution::par_unseq, range.begin(), range.end(), 
-        [=] (auto&& k_i_pair) {
-          auto [k, i] = k_i_pair;
+      cub::DeviceFor::ForEachInExtents(
+        cuda::std::extents<int, dynamic_extent, hs>{nz, hs},
+        [=] __device__ (int /* linear_index */, int k, int i) {
           const double z = (k_beg + k+0.5)*dz;
           if (fabs(z-3*zlen/4) <= zlen/16) {
             state(ID_UMOM, k+hs, i) = (state(ID_DENS, k+hs, i) + hy_dens_cell[k+hs]) * 50.0;
             state(ID_RHOT, k+hs, i) = (state(ID_DENS, k+hs, i) + hy_dens_cell[k+hs]) * 298.0 -
               hy_dens_theta_cell[k+hs];
           }
-        });
+        }, exec_policy.stream);
     }
   }
 }
 
 //Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
 //decomposition in the vertical direction
+template<class MemorySpace>
 void set_halo_values_z(
-  stdpar_ranges_execution_policy exec_policy,
+  cub_execution_policy exec_policy,
   view_3d state,
   const global_const_scalars& scalars,
-  const global_const_arrays<stdpar_ranges_execution_policy, host_memory_space>& arrays)
+  const global_const_arrays<MemorySpace>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
   auto hy_dens_cell = arrays.hy_dens_cell();
 
-  auto range = stdpar_md_range(exec_policy, NUM_VARS, nx + 2*hs);
-  std::for_each(std::execution::par_unseq, range.begin(), range.end(), 
-    [=] (auto&& ll_i_pair) {
-      auto [ll, i] = ll_i_pair;
+  cub::DeviceFor::ForEachInExtents(
+    cuda::std::extents<int, NUM_VARS, dynamic_extent>{NUM_VARS, nx + 2*hs},
+    [=] __device__ (int /* linear_index */, int ll, int i) {
       if (ll == ID_WMOM) {
         state(ll, 0, i) = 0.0;
         state(ll, 1, i) = 0.0;
@@ -120,12 +112,13 @@ void set_halo_values_z(
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
+template<class MemorySpace>
 void compute_tendencies_x(
-  stdpar_ranges_execution_policy exec_policy,
+  cub_execution_policy exec_policy,
   view_3d_const state,
   view_3d flux, view_3d tend, double dt,
   const global_const_scalars& scalars,
-  const global_const_arrays<stdpar_ranges_execution_policy, host_memory_space>& arrays)
+  const global_const_arrays<MemorySpace>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -135,11 +128,9 @@ void compute_tendencies_x(
   auto hy_dens_theta_cell = arrays.hy_dens_theta_cell();
 
   //Compute fluxes in the x-direction for each cell
-
-  auto range = stdpar_md_range(exec_policy, nz, nx+1);
-  std::for_each(std::execution::par_unseq, range.begin(), range.end(), 
-    [=] (auto&& k_i_pair) {
-      auto [k, i] = k_i_pair;
+  cub::DeviceFor::ForEachInExtents(
+    cuda::std::dextents<int, 2>{nz, nx+1},
+    [=] __device__ (int /* linear_index */, int k, int i) {
       //Use fourth-order interpolation from four cell averages
       //to compute the value at the interface in question
       std::array<double, NUM_VARS> d3_vals;
@@ -175,10 +166,9 @@ void compute_tendencies_x(
   {
     view_3d_const flux_c = flux;
 
-    auto range = stdpar_md_range(exec_policy, NUM_VARS, nz, nx);
-    std::for_each(std::execution::par_unseq, range.begin(), range.end(), 
-      [=] (auto&& ll_k_i_triple) {
-        auto [ll, k, i] = ll_k_i_triple;
+    cub::DeviceFor::ForEachInExtents(
+      cuda::std::extents<int, NUM_VARS, dynamic_extent, dynamic_extent>{NUM_VARS, nz, nx},
+      [=] __device__ (int /* linear_index */, int ll, int k, int i) {   
         tend(ll, k, i) = -( flux_c(ll, k, i+1) - flux_c(ll, k, i) ) / dx;
       });
   }
@@ -188,12 +178,13 @@ void compute_tendencies_x(
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
+template<class MemorySpace>
 void compute_tendencies_z(
-  stdpar_ranges_execution_policy exec_policy,
+  cub_execution_policy exec_policy,
   view_3d_const state,
   view_3d flux, view_3d tend, double dt,
   const global_const_scalars& scalars,
-  const global_const_arrays<stdpar_ranges_execution_policy, host_memory_space>& arrays)
+  const global_const_arrays<MemorySpace>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -204,10 +195,11 @@ void compute_tendencies_z(
   auto hy_pressure_int = arrays.hy_pressure_int();
 
   //Compute fluxes in the x-direction for each cell
-  auto range = stdpar_md_range(exec_policy, nz + 1, nx);
-  std::for_each(std::execution::par_unseq, range.begin(), range.end(),
-    [=] (auto&& k_i_pair) {
-      auto [k, i] = k_i_pair;
+
+  cub::DeviceFor::ForEachInExtents(
+    cuda::std::dextents<int, 2>{nz + 1, nx},
+    [=] __device__ (int /* linear_index */, int k, int i) {
+      //Use fourth-order interpolation from four cell averages
       //Use fourth-order interpolation from four cell averages
       //to compute the value at the interface in question
       std::array<double, NUM_VARS> d3_vals;
@@ -248,10 +240,9 @@ void compute_tendencies_z(
   {
     view_3d_const flux_c = flux;
 
-    auto range = stdpar_md_range(exec_policy, NUM_VARS, nz, nx);
-    std::for_each(std::execution::par_unseq, range.begin(), range.end(),
-      [=] (auto&& ll_k_i_triple) {
-        auto [ll, k, i] = ll_k_i_triple;
+    cub::DeviceFor::ForEachInExtents(
+      cuda::std::extents<int, NUM_VARS, dynamic_extent, dynamic_extent>{NUM_VARS, nz, nx},
+      [=] __device__ (int /* linear_index */, int ll, int k, int i) {
         tend(ll, k, i) = -( flux_c(ll, k+1, i) - flux_c(ll, k, i) ) / dz;
         if (ll == ID_WMOM) {
           tend(ll, k, i) = tend(ll, k, i) - state(ID_DENS, k+hs, i+hs)*grav;
@@ -260,24 +251,24 @@ void compute_tendencies_z(
   }
 }
 
+template<class MemorySpace>
 void apply_tendencies_to_fluid_state(
-  stdpar_ranges_execution_policy exec_policy,
+  cub_execution_policy exec_policy,
   view_3d_const state_init,
   view_3d state_out,
   double dt /* not scalars.dt */,
   view_3d tend,
   const global_const_scalars& scalars,
-  const global_const_arrays<stdpar_ranges_execution_policy, host_memory_space>& arrays)
+  const global_const_arrays<MemorySpace>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
   auto hy_dens_cell = arrays.hy_dens_cell();
   view_3d_const tend_c = tend;
 
-  auto range = stdpar_md_range(exec_policy, NUM_VARS, nz, nx);
-  std::for_each(std::execution::par_unseq, range.begin(), range.end(),
-    [=] (auto&& ll_k_i_triple) {
-      auto [ll, k, i] = ll_k_i_triple;
+  cub::DeviceFor::ForEachInExtents(
+    cuda::std::extents<int, NUM_VARS, dynamic_extent, dynamic_extent>{NUM_VARS, nz, nx},
+    [=] __device__ (int /* linear_index */, int ll, int k, int i) {
       if (data_spec_int == DATA_SPEC_GRAVITY_WAVES) {
         const int i_beg = scalars.i_beg;
         const int k_beg = scalars.k_beg;
@@ -292,15 +283,14 @@ void apply_tendencies_to_fluid_state(
 
 // Initialize the cell-averaged fluid state via Gauss-Legendre quadrature
 void initialize_cell_averaged_fluid_state(
-  stdpar_ranges_execution_policy exec_policy,
+  cub_execution_policy exec_policy,
   view_3d state, view_3d state_tmp,
   int nx, int nz,
   int i_beg, int k_beg)
 {
-  auto range = stdpar_md_range(exec_policy, nz + 2*hs, nx + 2*hs);
-  std::for_each(std::execution::par_unseq, range.begin(), range.end(),
-    [=] (auto&& k_i_pair) {
-      auto [k, i] = k_i_pair;
+  cub::DeviceFor::ForEachInExtents(
+    cuda::std::dextents<int, 2>{nz + 2*hs, nx + 2*hs},
+    [=] __device__ (int /* linear_index */, int k, int i) {
       // OpenACC doesn't support static arrays, even if they are constexpr.
       constexpr int nqpoints = 3;
       constexpr cuda::std::array<double, nqpoints> qpoints{
@@ -342,7 +332,7 @@ void initialize_cell_averaged_fluid_state(
 }
 
 void compute_hydrostatic_background_state(
-  stdpar_ranges_execution_policy exec_policy,
+  cub_execution_policy exec_policy,
   view_1d hy_dens_cell,
   view_1d hy_dens_theta_cell,
   view_1d hy_dens_int,
@@ -352,9 +342,8 @@ void compute_hydrostatic_background_state(
   int k_beg)
 {
   //Compute the hydrostatic background state over vertical cell averages
-  auto range0 = stdpar_md_range(exec_policy, nz + 2*hs);
-  std::for_each(std::execution::par_unseq, range0.begin(), range0.end(),
-    [=] (int k) {
+  cub::DeviceFor::Bulk(nz + 2*hs,
+    [=] __device__ (int k) {
       // OpenACC doesn't support static arrays, even if they are constexpr.
       constexpr int nqpoints = 3;
       constexpr cuda::std::array<double, nqpoints> qweights{
@@ -372,22 +361,21 @@ void compute_hydrostatic_background_state(
         hy_dens_cell[k]       = hy_dens_cell[k]       + hr    * qweights[kk];
         hy_dens_theta_cell[k] = hy_dens_theta_cell[k] + hr*ht * qweights[kk];
       }
-    });
+    }, exec_policy.stream);
 
   //Compute the hydrostatic background state at vertical cell interfaces
-  auto range1 = stdpar_md_range(exec_policy, nz + 1);
-  std::for_each(std::execution::par_unseq, range1.begin(), range1.end(),
-    [=] (int k) {
+  cub::DeviceFor::Bulk(nz + 1,
+    [=] __device__ (int k) {
       const double z = (k_beg + k)*dz;
       auto [r, u, w, t, hr, ht] = get_test_case(data_spec_int, 0.0, z);
       hy_dens_int[k]       = hr;
       hy_dens_theta_int[k] = hr * ht;
       hy_pressure_int[k]   = C0 * pow(hr * ht, gamm);
-    });
+    }, exec_policy.stream);
 }
 
-struct stdpar_reducer {
-  reduction_result
+struct cub_reducer {
+  __device__ reduction_result
   operator() (const reduction_result& r0, const reduction_result& r1) const {
     return reduction_result{
       .mass = r0.mass + r1.mass, // Accumulate domain mass
@@ -396,16 +384,14 @@ struct stdpar_reducer {
   }
 };
 
-struct stdpar_transformer {
-  view_3d_const state;
-  view_1d_const hy_dens_cell;
-  view_1d_const hy_dens_theta_cell;
+struct cub_transformer {
+  view3d_const state;
+  view1d_const hy_dens_cell;
+  view1d_const hy_dens_theta_cell;
+  int nz;
+  int nx;
 
-  template<class Int>
-    requires(std::is_integral_v<std::remove_cvref_t<Int>>)
-  reduction_result operator() (const std::tuple<Int, Int>& k_i_pair) const {
-    auto [k, i] = k_i_pair;
-
+  __device__ reduction_result local_result(int k, int i) const {
     double r  =  state(ID_DENS, k+hs, i+hs) + hy_dens_cell[hs+k]; // Density
     double u  =  state(ID_UMOM, k+hs, i+hs) / r;                  // U-wind
     double w  =  state(ID_WMOM, k+hs, i+hs) / r;                  // W-wind
@@ -419,21 +405,35 @@ struct stdpar_transformer {
       .te   = (ke + ie)*dx*dz  // domain total energy
     };
   }
+
+  __device__ reduction_result operator() (int index_1d) const {
+    int k = index_1d / nx;
+    int i = index_1d % nx;
+    return local_result(k, i);
+  }
 };
 
+// This is only for diagnostic output.
+// We just want the reductions to run on GPU (or in parallel)
+// so that we don't lose locality.
+template<class MemorySpace>
 reduction_result local_reductions(
-  stdpar_ranges_execution_policy exec_policy,
+  cub_execution_policy exec_policy,
   view_3d_const state,
   const global_const_scalars& const_scalars,
-  const global_const_arrays<stdpar_ranges_execution_policy, host_memory_space>& const_arrays)
+  const global_const_arrays<MemorySpace>& const_arrays)
 {
+  reduction_result result{0.0, 0.0};
   const int nx = const_scalars.nx;
   const int nz = const_scalars.nz;
   auto hy_dens_cell = const_arrays.hy_dens_cell();
   auto hy_dens_theta_cell = const_arrays.hy_dens_theta_cell();
 
-  auto range = stdpar_md_range(exec_policy, nz, nx);
-  auto transformer = stdpar_transformer{state, hy_dens_cell, hy_dens_theta_cell};
-  return std::transform_reduce(std::execution::par_unseq, range.begin(), range.end(),
-    reduction_result{0.0, 0.0}, stdpar_reducer{}, transformer);
+  cub_transformer transformer{state, hy_dens_cell, hy_dens_theta_cell, nz, nx};
+  auto begin = thrust::make_transform_iterator(
+    thrust::make_counting_iterator(0), transformer); 
+  auto end = thrust::make_transform_iterator(
+    thrust::make_counting_iterator(nz * nx), transformer);
+  auto reducer = cub_reducer{};
+  return thrust::reduce(begin, end, reduction_result{}, reducer);
 }

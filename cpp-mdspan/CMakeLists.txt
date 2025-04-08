@@ -63,35 +63,49 @@ else()
   message(STATUS "OpenACC not found")
 endif()
 
-
 # Find CUDA Toolkit; it's not required,
 # but other things (like CUB) depend on it.
 find_package(CUDAToolkit)
 
-if (DEFINED CUB_INCLUDE_DIR)
-  if (EXISTS "${CUB_INCLUDE_DIR}/cub/cub.cuh")
-    message(STATUS "User-defined CUB_INCLUDE_DIR: ${CUB_INCLUDE_DIR}")
-  else()
-    message(FATAL_ERROR "CUB_INCLUDE_DIR=\"{CUB_INCLUDE_DIR}\" is \
- defined but \"${CUB_INCLUDE_DIR}/cub/cub.cuh\" does not exist.")
-  endif()
-else()
-  if (CUDAToolkit_FOUND)
-    # Check whether CUDA Toolkit's include directory has CUB in it.
-    find_path(CUB_INCLUDE_DIR
-      NAMES cub/cub.cuh
-      PATHS
-        ${CUDAToolkit_INCLUDE_DIRS}
-        /usr/include
-        /usr/local/include
-      DOC "Path to CUB include directory."
-    )
-    message(STATUS "Discovered CUB_INCLUDE_DIR: ${CUB_INCLUDE_DIR}")
-    if (CUDAToolkit_VERSION VERSION_LESS "12.8.0")
-      message(STATUS "CUDAToolkit_VERSION 12.6.85 is known to lack ForEachInExtents.  \
+set(MINIWEATHER_CUB_FOUND FALSE)
+
+if (CUDAToolkit_FOUND AND (NOT (DEFINED CUB_INCLUDE_DIR)))
+  # Check whether CUDA Toolkit's include directory has CUB in it.
+  find_path(CUB_INCLUDE_DIR
+    NAMES cub/cub.cuh
+    PATHS
+      ${CUDAToolkit_INCLUDE_DIRS}
+      /usr/include
+      /usr/local/include
+    DOC "Path to CUB include directory."
+  )
+  message(STATUS "Discovered CUB_INCLUDE_DIR: ${CUB_INCLUDE_DIR}")
+  if (CUDAToolkit_VERSION VERSION_LESS "12.8.0")
+    message(STATUS "CUDAToolkit_VERSION 12.6.85 is known to lack ForEachInExtents.  \
 Your CUDAToolkit_VERSION is ${CUDAToolkit_VERSION}.")
-    endif()
   endif()
+endif()
+ 
+if (DEFINED CUB_INCLUDE_DIR)
+  set(CUB_TEST_FILE_0 "${CUB_INCLUDE_DIR}/cub/cub.cuh")
+  set(CUB_TEST_FILE_0_FOUND FALSE)
+  # This was added to later versions of CUB.
+  set(CUB_TEST_FILE_1 "${CUB_INCLUDE_DIR}/cub/device/device_for_each.cuh")
+  set(CUB_TEST_FILE_1_FOUND FALSE)
+
+  if (EXISTS "${CUB_TEST_FILE_0}")
+    message(STATUS "User-defined CUB_INCLUDE_DIR ${CUB_INCLUDE_DIR} contains cub/cub.cuh")
+  else()
+    message(STATUS "User-defined CUB_INCLUDE_DIR ${CUB_INCLUDE_DIR} does NOT contain cub/cub.cuh")
+  endif()
+
+  if (EXISTS "${CUB_TEST_FILE_1}")
+    message(STATUS "User-defined CUB_INCLUDE_DIR ${CUB_INCLUDE_DIR} contains cub/device/device_for_each.cuh")
+  else()
+    message(STATUS "User-defined CUB_INCLUDE_DIR ${CUB_INCLUDE_DIR} does NOT contain cub/device/device_for_each.cuh")
+  endif()
+
+  set(MINIWEATHER_CUB_FOUND (${CUB_TEST_FILE_0_FOUND} AND ${CUB_TEST_FILE_1_FOUND}))
 endif()
 
 # Please see Kokkos' CMake instructions:
@@ -161,8 +175,10 @@ target_compile_options(test_unique_mdarray PRIVATE
     /W4>
 )
 
+message(STATUS "Enabled miniWeather_serial")
 add_executable(miniWeather_serial miniWeather_mdspan.cpp miniWeather_common.cpp)
 target_include_directories(miniWeather_serial PRIVATE "${PROJECT_SOURCE_DIR}")
+target_compile_definitions(miniWeather_serial PRIVATE MINIWEATHER_SERIAL)
 
 # If building with Kokkos, we've already added the mdspan headers
 # to the include path (see above).
@@ -177,6 +193,7 @@ target_compile_options(miniWeather_serial PRIVATE
 )
 
 if (kokkos_POPULATED)
+  message(STATUS "Enabled miniWeather_kokkos_serial")
   add_executable(miniWeather_kokkos_serial miniWeather_mdspan.cpp miniWeather_common.cpp)
   target_include_directories(miniWeather_kokkos_serial PRIVATE "${PROJECT_SOURCE_DIR}")
 
@@ -196,6 +213,7 @@ endif()
 if (kokkos_POPULATED AND OpenACC_FOUND)
   set(Kokkos_ENABLE_OPENACC ON)
 
+  message(STATUS "Enabled miniWeather_kokkos_openacc")
   add_executable(miniWeather_kokkos_openacc miniWeather_mdspan.cpp miniWeather_common.cpp)
   target_include_directories(miniWeather_kokkos_openacc PRIVATE "${PROJECT_SOURCE_DIR}")
 
@@ -213,9 +231,13 @@ if (kokkos_POPULATED AND OpenACC_FOUND)
   )
 endif()
 
+# We don't have a "pure OpenACC" version yet.
+if (FALSE)
 if (OpenACC_FOUND)
+  message(STATUS "Enabled miniWeather_openacc")
   add_executable(miniWeather_openacc miniWeather_mdspan.cpp miniWeather_common.cpp)
   target_include_directories(miniWeather_openacc PRIVATE "${PROJECT_SOURCE_DIR}")
+  target_compile_definitions(miniWeather_openacc PRIVATE MINIWEATHER_OPENACC)
 
   # If building with Kokkos, we've already added the mdspan headers
   # to the include path (see above).
@@ -230,13 +252,18 @@ if (OpenACC_FOUND)
       /W4>
   )
 endif()
+endif()
 
+set(MINIWEATHER_HAVE_STDPAR (${CMAKE_CXX_STANDARD} GREATER_EQUAL 23))
 # Option to enable stdpar
-set(MINIWEATHER_ENABLE_STDPAR DETECT CACHE STRING "Enable stdpar using the -stdpar flag")
+set(MINIWEATHER_ENABLE_STDPAR ${MINIWEATHER_HAVE_STDPAR} CACHE BOOL "Enable stdpar using the -stdpar flag")
 
 if (MINIWEATHER_ENABLE_STDPAR)
+  message(STATUS "Enabled miniWeather_stdpar_cpu")
   add_executable(miniWeather_stdpar_cpu miniWeather_mdspan.cpp miniWeather_common.cpp)
   target_include_directories(miniWeather_stdpar_cpu PRIVATE "${PROJECT_SOURCE_DIR}")
+  target_compile_definitions(miniWeather_stdpar_cpu PRIVATE MINIWEATHER_STDPAR)
+  target_compile_definitions(miniWeather_stdpar_cpu PRIVATE MINIWEATHER_STDPAR_CPU)
 
   # If building with Kokkos, we've already added the mdspan headers
   # to the include path (see above).
@@ -254,8 +281,11 @@ if (MINIWEATHER_ENABLE_STDPAR)
 endif()
 
 if (MINIWEATHER_ENABLE_STDPAR)
+  message(STATUS "Enabled miniWeather_stdpar_gpu")
   add_executable(miniWeather_stdpar_gpu miniWeather_mdspan.cpp miniWeather_common.cpp)
   target_include_directories(miniWeather_stdpar_gpu PRIVATE "${PROJECT_SOURCE_DIR}")
+  target_compile_definitions(miniWeather_stdpar_gpu PRIVATE MINIWEATHER_STDPAR)
+  target_compile_definitions(miniWeather_stdpar_gpu PRIVATE MINIWEATHER_STDPAR_GPU)
 
   # If building with Kokkos, we've already added the mdspan headers
   # to the include path (see above).
@@ -273,8 +303,11 @@ if (MINIWEATHER_ENABLE_STDPAR)
 endif()
 
 if (MINIWEATHER_ENABLE_STDPAR AND OpenACC_FOUND)
+  message(STATUS "Enabled miniWeather_stdpar_openacc")
   add_executable(miniWeather_stdpar_openacc miniWeather_mdspan.cpp miniWeather_common.cpp)
   target_include_directories(miniWeather_stdpar_openacc PRIVATE "${PROJECT_SOURCE_DIR}")
+  target_compile_definitions(miniWeather_stdpar_openacc PRIVATE MINIWEATHER_STDPAR)
+  target_compile_definitions(miniWeather_stdpar_openacc PRIVATE MINIWEATHER_STDPAR_OPENACC)
 
   # If building with Kokkos, we've already added the mdspan headers
   # to the include path (see above).
@@ -290,4 +323,35 @@ if (MINIWEATHER_ENABLE_STDPAR AND OpenACC_FOUND)
   )
   target_compile_options(miniWeather_stdpar_openacc PRIVATE "-stdpar=gpu:acc")
   target_link_options(miniWeather_stdpar_openacc PRIVATE "-stdpar=gpu:acc")
+endif()
+
+# Option to enable CUB
+set(MINIWEATHER_ENABLE_CUB ${MINIWEATHER_CUB_FOUND} CACHE BOOL "Enable CUB")
+
+if (MINIWEATHER_ENABLE_CUB)
+  message(STATUS "Enabled miniWeather_cub")
+  add_executable(miniWeather_cub miniWeather_mdspan.cpp miniWeather_common.cpp)
+  target_include_directories(miniWeather_cub PRIVATE "${PROJECT_SOURCE_DIR}")
+  target_compile_definitions(miniWeather_cub PRIVATE MINIWEATHER_CUB)
+
+  # If building with Kokkos, we've already added the mdspan headers
+  # to the include path (see above).
+  if (NOT kokkos_POPULATED)
+    target_link_libraries(miniWeather_cub PRIVATE std::mdspan)
+  endif()
+  target_compile_options(miniWeather_cub PRIVATE
+    $<$<OR:$<CXX_COMPILER_ID:NVHPC>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+      -Wall>
+    $<$<CXX_COMPILER_ID:MSVC>:
+      /W4>
+  )
+  # Building CUB with nvc++ requires the "-cuda" flag
+  target_compile_options(miniWeather_cub PRIVATE
+    $<$<OR:$<CXX_COMPILER_ID:NVHPC>>:
+      -cuda>
+  )
+  target_link_options(miniWeather_cub PRIVATE
+    $<$<OR:$<CXX_COMPILER_ID:NVHPC>>:
+      -cuda>
+  )
 endif()

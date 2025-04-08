@@ -1,9 +1,7 @@
 #pragma once
 
-#include "miniWeather_common.hpp"
-#if defined(MINIWEATHER_KOKKOS)
-#  include "Kokkos_Core.hpp"
-#endif
+// Include this after including miniWeather_common.hpp
+// and any execution space - specific headers.
 
 // Perform a single time step.
 // Time steps are dimensionally split and
@@ -17,34 +15,34 @@
 // q**    = q[n] + dt/2 * rhs(q*  )
 // q[n+1] = q[n] + dt/1 * rhs(q** )
 //
-template<class ExecutionPolicy, class MemorySpace>
+template<class ExecutionSpace, class MemorySpace>
 void perform_timestep(
-  ExecutionPolicy exec_policy,
+  ExecutionSpace exec_space,
   view_3d state, view_3d state_tmp,
   view_3d flux, view_3d tend,
   const global_const_scalars& c_scalars,
-  const global_const_arrays<MemorySpace>& c_arrays,
+  const global_const_arrays<ExecutionSpace, MemorySpace>& c_arrays,
   global_scalars& scalars)
 {
   const double dt = scalars.dt;
   if (scalars.direction_switch) {
     //x-direction first
-    semi_discrete_step(exec_policy, state, state    , state_tmp, dt / 3, direction::X, flux, tend, c_scalars, c_arrays);
-    semi_discrete_step(exec_policy, state, state_tmp, state_tmp, dt / 2, direction::X, flux, tend, c_scalars, c_arrays);
-    semi_discrete_step(exec_policy, state, state_tmp, state    , dt / 1, direction::X, flux, tend, c_scalars, c_arrays);
+    semi_discrete_step(exec_space, state, state    , state_tmp, dt / 3, direction::X, flux, tend, c_scalars, c_arrays);
+    semi_discrete_step(exec_space, state, state_tmp, state_tmp, dt / 2, direction::X, flux, tend, c_scalars, c_arrays);
+    semi_discrete_step(exec_space, state, state_tmp, state    , dt / 1, direction::X, flux, tend, c_scalars, c_arrays);
     //z-direction second
-    semi_discrete_step(exec_policy, state, state    , state_tmp, dt / 3, direction::Z, flux, tend, c_scalars, c_arrays);
-    semi_discrete_step(exec_policy, state, state_tmp, state_tmp, dt / 2, direction::Z, flux, tend, c_scalars, c_arrays);
-    semi_discrete_step(exec_policy, state, state_tmp, state    , dt / 1, direction::Z, flux, tend, c_scalars, c_arrays);
+    semi_discrete_step(exec_space, state, state    , state_tmp, dt / 3, direction::Z, flux, tend, c_scalars, c_arrays);
+    semi_discrete_step(exec_space, state, state_tmp, state_tmp, dt / 2, direction::Z, flux, tend, c_scalars, c_arrays);
+    semi_discrete_step(exec_space, state, state_tmp, state    , dt / 1, direction::Z, flux, tend, c_scalars, c_arrays);
   } else {
     //z-direction second
-    semi_discrete_step(exec_policy, state, state    , state_tmp, dt / 3, direction::Z, flux, tend, c_scalars, c_arrays);
-    semi_discrete_step(exec_policy, state, state_tmp, state_tmp, dt / 2, direction::Z, flux, tend, c_scalars, c_arrays);
-    semi_discrete_step(exec_policy, state, state_tmp, state    , dt / 1, direction::Z, flux, tend, c_scalars, c_arrays);
+    semi_discrete_step(exec_space, state, state    , state_tmp, dt / 3, direction::Z, flux, tend, c_scalars, c_arrays);
+    semi_discrete_step(exec_space, state, state_tmp, state_tmp, dt / 2, direction::Z, flux, tend, c_scalars, c_arrays);
+    semi_discrete_step(exec_space, state, state_tmp, state    , dt / 1, direction::Z, flux, tend, c_scalars, c_arrays);
     //x-direction first
-    semi_discrete_step(exec_policy, state, state    , state_tmp, dt / 3, direction::X, flux, tend, c_scalars, c_arrays);
-    semi_discrete_step(exec_policy, state, state_tmp, state_tmp, dt / 2, direction::X, flux, tend, c_scalars, c_arrays);
-    semi_discrete_step(exec_policy, state, state_tmp, state    , dt / 1, direction::X, flux, tend, c_scalars, c_arrays);
+    semi_discrete_step(exec_space, state, state    , state_tmp, dt / 3, direction::X, flux, tend, c_scalars, c_arrays);
+    semi_discrete_step(exec_space, state, state_tmp, state_tmp, dt / 2, direction::X, flux, tend, c_scalars, c_arrays);
+    semi_discrete_step(exec_space, state, state_tmp, state    , dt / 1, direction::X, flux, tend, c_scalars, c_arrays);
   }
   if (scalars.direction_switch) {
     scalars.direction_switch = 0;
@@ -57,35 +55,35 @@ void perform_timestep(
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing,
 //and stores the result in state_out
-template<class ExecutionPolicy, class MemorySpace>
+template<class ExecutionSpace, class MemorySpace>
 void semi_discrete_step(
-  ExecutionPolicy exec_policy,
+  ExecutionSpace exec_space,
   view_3d_const state_init,
   view_3d state_forcing,
   view_3d state_out,
   double dt /* not scalars.dt */,
   direction dir, view_3d flux, view_3d tend,
   const global_const_scalars& scalars,
-  const global_const_arrays<MemorySpace>& arrays)
+  const global_const_arrays<ExecutionSpace, MemorySpace>& arrays)
 {
   if (dir == direction::X) {
     //Set the halo values for this MPI task's fluid state in the x-direction
-    set_halo_values_x(exec_policy, state_forcing, scalars, arrays);
+    set_halo_values_x(exec_space, state_forcing, scalars, arrays);
     //Compute the time tendencies for the fluid state in the x-direction
-    compute_tendencies_x(exec_policy, state_forcing, flux, tend, dt, scalars, arrays);
+    compute_tendencies_x(exec_space, state_forcing, flux, tend, dt, scalars, arrays);
   } else if (dir == direction::Z) {
     //Set the halo values for this MPI task's fluid state in the z-direction
-    set_halo_values_z(exec_policy, state_forcing, scalars, arrays);
+    set_halo_values_z(exec_space, state_forcing, scalars, arrays);
     //Compute the time tendencies for the fluid state in the z-direction
-    compute_tendencies_z(exec_policy, state_forcing, flux, tend, dt, scalars, arrays);
+    compute_tendencies_z(exec_space, state_forcing, flux, tend, dt, scalars, arrays);
   }
 
-  apply_tendencies_to_fluid_state(exec_policy, state_init, state_out, dt, tend, scalars, arrays);
+  apply_tendencies_to_fluid_state(exec_space, state_init, state_out, dt, tend, scalars, arrays);
 }
 
-template<class ExecutionPolicy, class MemorySpace>
-init_result<MemorySpace> init(
-  ExecutionPolicy exec_policy,
+template<class ExecutionSpace, class MemorySpace>
+init_result<ExecutionSpace, MemorySpace> init(
+  ExecutionSpace exec_space,
   MemorySpace memory_space,
   int *argc , char ***argv)
 {
@@ -117,7 +115,7 @@ init_result<MemorySpace> init(
   int right_rank = 0;
   bool mainproc = (myrank == 0);
 
-  global_arrays gl_arrs(memory_space, nx, nz, hs);
+  global_arrays gl_arrs(exec_space, memory_space, nx, nz, hs);
   auto state = gl_arrs.state();
   auto state_tmp = gl_arrs.state_tmp();
   auto flux = gl_arrs.flux();
@@ -135,10 +133,10 @@ init_result<MemorySpace> init(
   //Want to make sure this info is displayed before further output
   (void) MPI_Barrier(MPI_COMM_WORLD);
 
-  initialize_cell_averaged_fluid_state(exec_policy,
+  initialize_cell_averaged_fluid_state(exec_space,
     state, state_tmp, nx, nz, i_beg, k_beg);
 
-  global_const_arrays gl_const_arrs(memory_space, nx, nz, hs);
+  global_const_arrays gl_const_arrs(exec_space, memory_space, nx, nz, hs);
   // Get nonconst views, so we can fill them in below.
   auto hy_dens_cell       = gl_const_arrs.hy_dens_cell();
   auto hy_dens_theta_cell = gl_const_arrs.hy_dens_theta_cell();
@@ -146,7 +144,7 @@ init_result<MemorySpace> init(
   auto hy_dens_theta_int  = gl_const_arrs.hy_dens_theta_int();
   auto hy_pressure_int    = gl_const_arrs.hy_pressure_int();
 
-  compute_hydrostatic_background_state(exec_policy,
+  compute_hydrostatic_background_state(exec_space,
     hy_dens_cell, hy_dens_theta_cell,
     hy_dens_int, hy_dens_theta_int, hy_pressure_int, nz, k_beg);
 
@@ -193,14 +191,14 @@ init_result<MemorySpace> init(
 }
 
 //Compute reduced quantities for error checking without resorting to the "ncdiff" tool
-template<class ExecutionPolicy, class MemorySpace>
+template<class ExecutionSpace, class MemorySpace>
 reduction_result reductions(
-  ExecutionPolicy exec_policy,
+  ExecutionSpace exec_space,
   view_3d_const state,
   const global_const_scalars& const_scalars,
-  const global_const_arrays<MemorySpace>& const_arrays)
+  const global_const_arrays<ExecutionSpace, MemorySpace>& const_arrays)
 {
-  reduction_result result = local_reductions(exec_policy,
+  reduction_result result = local_reductions(exec_space,
     state, const_scalars, const_arrays);
   std::array<double, 2> loc{result.mass, result.te};
   std::array<double, 2> glob{0.0, 0.0};

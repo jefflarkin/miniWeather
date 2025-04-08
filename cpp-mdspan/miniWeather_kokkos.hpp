@@ -8,37 +8,54 @@
 #  if ! defined(KOKKOS_ENABLE_OPENACC)
 #    error "Kokkos OpenACC is not enabled"
 #  endif
+#endif
 
-// Users aren't allowed to include OpenACC/Kokkos_OpenACC.hpp directly.
-//#include "OpenACC/Kokkos_OpenACC.hpp"
-using kokkos_execution_policy = Kokkos::Experimental::OpenACC;
-
-#elif defined(MINIWEATHER_KOKKOS_SERIAL)
+#if defined(MINIWEATHER_KOKKOS_SERIAL)
 #  if ! defined(KOKKOS_ENABLE_SERIAL)
 #    error "Kokkos Serial is not enabled"
 #  endif
-
-// Users aren't allowed to include Serial/Kokkos_Serial.hpp directly.
-//#include "Serial/Kokkos_Serial.hpp"
-using kokkos_execution_policy = Kokkos::Serial;
-
-#else
-#  error "No Kokkos execution policy defined"
 #endif
 
-template<int MyRank>
+#if defined(MINIWEATHER_KOKKOS_CUDA)
+#  if ! defined(KOKKOS_ENABLE_CUDA)
+#    error "Kokkos CUDA is not enabled"
+#  endif
+#endif
+
+#if defined(KOKKOS_ENABLE_CUDA)
+auto default_memory_space(Kokkos::Cuda) {
+  return Kokkos::CudaSpace{};
+}
+#endif
+
+#if defined(KOKKOS_ENABLE_OPENACC)
+auto default_memory_space(Kokkos::Experimental::OpenACC) {
+  return Kokkos::Experimental::OpenACCSpace{};
+}
+#endif
+
+#if defined(KOKKOS_ENABLE_SERIAL)
+auto default_memory_space(Kokkos::Serial) {
+  return Kokkos::HostSpace{};
+}
+#endif
+
+template<class ExecutionPolicy, int MyRank>
 using md_range_policy = Kokkos::MDRangePolicy<
-  kokkos_execution_policy,
+  ExecutionPolicy,
   Kokkos::Rank<MyRank>,
   Kokkos::IndexType<int>>;
 
 //Set this MPI task's halo values in the x-direction.
-template<class MemorySpace>
+template<class ExecutionSpace, class MemorySpace>
+  requires(
+    Kokkos::is_execution_space_v<ExecutionSpace> &&
+    Kokkos::is_memory_space_v<MemorySpace>)
 void set_halo_values_x(
-  kokkos_execution_policy exec_policy,
+  ExecutionSpace exec_space,
   view_3d state,
   const global_const_scalars& scalars,
-  const global_const_arrays<MemorySpace>& arrays)
+  const global_const_arrays<ExecutionSpace, MemorySpace>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -57,7 +74,7 @@ void set_halo_values_x(
 
   Kokkos::parallel_for(
     "set_halo_values_x",
-    md_range_policy<2>(exec_policy, {0, 0}, {NUM_VARS, nz}),
+    md_range_policy<ExecutionSpace, 2>(exec_space, {0, 0}, {NUM_VARS, nz}),
     KOKKOS_LAMBDA(int ll, int k) {
       state(ll, k+hs, 0) = state(ll, k+hs, nx+hs-2);
       state(ll, k+hs, 1) = state(ll, k+hs, nx+hs-1);
@@ -74,7 +91,7 @@ void set_halo_values_x(
 
       Kokkos::parallel_for(
         "set_halo_values_x(INJECTION)",
-        md_range_policy<2>(exec_policy, {0, 0}, {nz, hs}),
+        md_range_policy<ExecutionSpace, 2>(exec_space, {0, 0}, {nz, hs}),
         KOKKOS_LAMBDA(int k, int i) {
           const double z = (k_beg + k+0.5)*dz;
           if (fabs(z-3*zlen/4) <= zlen/16) {
@@ -89,12 +106,15 @@ void set_halo_values_x(
 
 //Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
 //decomposition in the vertical direction
-template<class MemorySpace>
+template<class ExecutionSpace, class MemorySpace>
+  requires(
+    Kokkos::is_execution_space_v<ExecutionSpace> &&
+    Kokkos::is_memory_space_v<MemorySpace>)
 void set_halo_values_z(
-  kokkos_execution_policy exec_policy,
+  ExecutionSpace exec_space,
   view_3d state,
   const global_const_scalars& scalars,
-  const global_const_arrays<MemorySpace>& arrays)
+  const global_const_arrays<ExecutionSpace, MemorySpace>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -102,7 +122,7 @@ void set_halo_values_z(
 
   Kokkos::parallel_for(
     "set_halo_values_z",
-    md_range_policy<2>(exec_policy, {0, 0}, {NUM_VARS, nx + 2*hs}),
+    md_range_policy<ExecutionSpace, 2>(exec_space, {0, 0}, {NUM_VARS, nx + 2*hs}),
     KOKKOS_LAMBDA(int ll, int i) {
       if (ll == ID_WMOM) {
         state(ll, 0, i) = 0.0;
@@ -127,13 +147,16 @@ void set_halo_values_z(
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-template<class MemorySpace>
+template<class ExecutionSpace, class MemorySpace>
+  requires(
+    Kokkos::is_execution_space_v<ExecutionSpace> &&
+    Kokkos::is_memory_space_v<MemorySpace>)
 void compute_tendencies_x(
-  kokkos_execution_policy exec_policy,
+  ExecutionSpace exec_space,
   view_3d_const state,
   view_3d flux, view_3d tend, double dt,
   const global_const_scalars& scalars,
-  const global_const_arrays<MemorySpace>& arrays)
+  const global_const_arrays<ExecutionSpace, MemorySpace>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -145,7 +168,7 @@ void compute_tendencies_x(
   //Compute fluxes in the x-direction for each cell
   Kokkos::parallel_for(
     "compute_tendencies_x(1)",
-    md_range_policy<2>(exec_policy, {0, 0}, {nz, nx+1}),
+    md_range_policy<ExecutionSpace, 2>(exec_space, {0, 0}, {nz, nx+1}),
     KOKKOS_LAMBDA(int k, int i) {
       //Use fourth-order interpolation from four cell averages
       //to compute the value at the interface in question
@@ -183,7 +206,7 @@ void compute_tendencies_x(
     view_3d_const flux_c = flux;
     Kokkos::parallel_for(
       "compute_tendencies_x(2)",
-      md_range_policy<3>(exec_policy, {0, 0, 0}, {NUM_VARS, nz, nx}),
+      md_range_policy<ExecutionSpace, 3>(exec_space, {0, 0, 0}, {NUM_VARS, nz, nx}),
       KOKKOS_LAMBDA(int ll, int k, int i) {
         tend(ll, k, i) = -( flux_c(ll, k, i+1) - flux_c(ll, k, i) ) / dx;
       });
@@ -194,13 +217,16 @@ void compute_tendencies_x(
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-template<class MemorySpace>
+template<class ExecutionSpace, class MemorySpace>
+  requires(
+    Kokkos::is_execution_space_v<ExecutionSpace> &&
+    Kokkos::is_memory_space_v<MemorySpace>)
 void compute_tendencies_z(
-  kokkos_execution_policy exec_policy,
+  ExecutionSpace exec_space,
   view_3d_const state,
   view_3d flux, view_3d tend, double dt,
   const global_const_scalars& scalars,
-  const global_const_arrays<MemorySpace>& arrays)
+  const global_const_arrays<ExecutionSpace, MemorySpace>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -213,7 +239,7 @@ void compute_tendencies_z(
   //Compute fluxes in the x-direction for each cell
   Kokkos::parallel_for(
     "compute_tendencies_z(1)",
-    md_range_policy<2>(exec_policy, {0, 0}, {nz + 1, nx}),
+    md_range_policy<ExecutionSpace, 2>(exec_space, {0, 0}, {nz + 1, nx}),
     KOKKOS_LAMBDA(int k, int i) {
       //Use fourth-order interpolation from four cell averages
       //to compute the value at the interface in question
@@ -256,7 +282,7 @@ void compute_tendencies_z(
     view_3d_const flux_c = flux;
     Kokkos::parallel_for(
       "compute_tendencies_z(2)",
-      md_range_policy<3>(exec_policy, {0, 0, 0}, {NUM_VARS, nz, nx}),
+      md_range_policy<ExecutionSpace, 3>(exec_space, {0, 0, 0}, {NUM_VARS, nz, nx}),
       KOKKOS_LAMBDA(int ll, int k, int i) {
         tend(ll, k, i) = -( flux_c(ll, k+1, i) - flux_c(ll, k, i) ) / dz;
         if (ll == ID_WMOM) {
@@ -266,15 +292,18 @@ void compute_tendencies_z(
   }
 }
 
-template<class MemorySpace>
+template<class ExecutionSpace, class MemorySpace>
+  requires(
+    Kokkos::is_execution_space_v<ExecutionSpace> &&
+    Kokkos::is_memory_space_v<MemorySpace>)
 void apply_tendencies_to_fluid_state(
-  kokkos_execution_policy exec_policy,
+  ExecutionSpace exec_space,
   view_3d_const state_init,
   view_3d state_out,
   double dt /* not scalars.dt */,
   view_3d tend,
   const global_const_scalars& scalars,
-  const global_const_arrays<MemorySpace>& arrays)
+  const global_const_arrays<ExecutionSpace, MemorySpace>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -283,7 +312,7 @@ void apply_tendencies_to_fluid_state(
 
   Kokkos::parallel_for(
     "apply_tendencies_to_fluid_state",
-    md_range_policy<3>(exec_policy, {0, 0, 0}, {NUM_VARS, nz, nx}),
+    md_range_policy<ExecutionSpace, 3>(exec_space, {0, 0, 0}, {NUM_VARS, nz, nx}),
     KOKKOS_LAMBDA(int ll, int k, int i) {
       if (data_spec_int == DATA_SPEC_GRAVITY_WAVES) {
         const int i_beg = scalars.i_beg;
@@ -298,15 +327,17 @@ void apply_tendencies_to_fluid_state(
 }
 
 // Initialize the cell-averaged fluid state via Gauss-Legendre quadrature
+template<class ExecutionSpace>
+  requires(Kokkos::is_execution_space_v<ExecutionSpace>)
 void initialize_cell_averaged_fluid_state(
-  kokkos_execution_policy exec_policy,
+  ExecutionSpace exec_space,
   view_3d state, view_3d state_tmp,
   int nx, int nz,
   int i_beg, int k_beg)
 {
   Kokkos::parallel_for(
     "initialize_cell_averaged_fluid_state",
-    md_range_policy<2>(exec_policy, {0, 0}, {nz + 2*hs, nx + 2*hs}),
+    md_range_policy<ExecutionSpace, 2>(exec_space, {0, 0}, {nz + 2*hs, nx + 2*hs}),
     KOKKOS_LAMBDA(int k, int i) {
       // OpenACC doesn't support static arrays, even if they are constexpr.
       constexpr int nqpoints = 3;
@@ -348,8 +379,10 @@ void initialize_cell_averaged_fluid_state(
     });
 }
 
+template<class ExecutionSpace>
+  requires(Kokkos::is_execution_space_v<ExecutionSpace>)
 void compute_hydrostatic_background_state(
-  kokkos_execution_policy exec_policy,
+  ExecutionSpace exec_space,
   view_1d hy_dens_cell,
   view_1d hy_dens_theta_cell,
   view_1d hy_dens_int,
@@ -359,12 +392,12 @@ void compute_hydrostatic_background_state(
   int k_beg)
 {
   using range_1d_type =
-    Kokkos::RangePolicy<kokkos_execution_policy, Kokkos::IndexType<int>>;
+    Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<int>>;
 
   //Compute the hydrostatic background state over vertical cell averages
   Kokkos::parallel_for(
     "compute_hydrostatic_background_state(1)",
-    range_1d_type(exec_policy, 0, nz + 2*hs),
+    range_1d_type(exec_space, 0, nz + 2*hs),
     KOKKOS_LAMBDA(int k) {
       // OpenACC doesn't support static arrays, even if they are constexpr.
       constexpr int nqpoints = 3;
@@ -388,7 +421,7 @@ void compute_hydrostatic_background_state(
   //Compute the hydrostatic background state at vertical cell interfaces
   Kokkos::parallel_for(
     "compute_hydrostatic_background_state(2)",
-    range_1d_type(exec_policy, 0, nz + 1),
+    range_1d_type(exec_space, 0, nz + 1),
     KOKKOS_LAMBDA(int k) {
       const double z = (k_beg + k)*dz;
       auto [r, u, w, t, hr, ht] = get_test_case(data_spec_int, 0.0, z);
@@ -398,12 +431,15 @@ void compute_hydrostatic_background_state(
     });
 }
 
-template<class MemorySpace>
+template<class ExecutionSpace, class MemorySpace>
+  requires(
+    Kokkos::is_execution_space_v<ExecutionSpace> &&
+    Kokkos::is_memory_space_v<MemorySpace>)
 reduction_result local_reductions(
-  kokkos_execution_policy exec_policy,
+  ExecutionSpace exec_space,
   view_3d_const state,
   const global_const_scalars& const_scalars,
-  const global_const_arrays<MemorySpace>& const_arrays)
+  const global_const_arrays<ExecutionSpace, MemorySpace>& const_arrays)
 {
   reduction_result result{0.0, 0.0};
   const int nx = const_scalars.nx;
@@ -412,23 +448,31 @@ reduction_result local_reductions(
   auto hy_dens_theta_cell = const_arrays.hy_dens_theta_cell();
 
   // Kokkos doesn't currently implement parallel_reduce(MDRangePolicy) for OpenACC.
-#if defined(MINIWEATHER_KOKKOS_OPENACC)
+  auto my_exec_space = [] (auto input_exec_space) {
+#if defined(KOKKOS_ENABLE_OPENACC)
+    if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Experimental::OpenACC>) {
 #  if defined(KOKKOS_ENABLE_CUDA)
-  auto my_exec_policy = Kokkos::Cuda{};
+      return Kokkos::Cuda{};
 #  elif defined(KOKKOS_ENABLE_SERIAL)
-  auto my_exec_policy = Kokkos::Serial{};
+      return Kokkos::Serial{};
 #  else
 #    error "No fall-back execution policy defined"
+      static_assert(false);
 #  endif
+    }
+    else {
+      return input_exec_space;
+    }
 #else
-  auto my_exec_policy = exec_policy;
-#endif 
+    return input_exec_space;
+#endif
+  } (exec_space);
 
   Kokkos::MDRangePolicy<
-    std::remove_cvref_t<decltype(my_exec_policy)>,
+    std::remove_cvref_t<decltype(my_exec_space)>,
     Kokkos::Rank<2>,
     Kokkos::IndexType<int>>
-  range(my_exec_policy, {0, 0}, {nz, nx});
+  range(my_exec_space, {0, 0}, {nz, nx});
 
   Kokkos::parallel_reduce(
     "local_reductions",

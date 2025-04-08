@@ -9,8 +9,15 @@
 #include "miniWeather_common.hpp"
 #include "miniWeather_output.hpp"
 
-#if defined(MINIWEATHER_KOKKOS)
+#if defined(MINIWEATHER_CUB)
+#  include "miniWeather_cub.hpp"
+#elif defined(MINIWEATHER_KOKKOS)
 #  include "miniWeather_kokkos.hpp"
+#elif defined(MINIWEATHER_STDPAR)
+#  include "miniWeather_stdpar.hpp"
+#elif defined(MINIWEATHER_OPENACC)
+// Doesn't exist yet
+//#  include "miniWeather_openacc.hpp"
 #else
 #  include "miniWeather_serial.hpp"
 #endif
@@ -18,16 +25,38 @@
 // This needs to go after the above (execution policy - specific) headers.
 #include "miniWeather_generic_algs.hpp"
 
-auto default_memory_space() {
-  return host_memory_space{};
+// Implementations may, but are not required
+// to specialize this for their execution space type(s).
+template<class ExecutionSpace>
+host_memory_space default_memory_space(ExecutionSpace) {
+  return {};
 }
 
-auto default_execution_policy() {
-#if defined(MINIWEATHER_KOKKOS)
-  return kokkos_execution_policy{};
+#if defined(MINIWEATHER_CUB)
+#  define MINIWEATHER_DEFAULT_EXECUTION_POLICY cub_execution_policy
+#elif defined(MINIWEATHER_KOKKOS)
+#  if defined(MINIWEATHER_KOKKOS_CUDA)
+#    define MINIWEATHER_DEFAULT_EXECUTION_POLICY Kokkos::Cuda
+#  elif defined(MINIWEATHER_KOKKOS_OPENACC)
+#    define MINIWEATHER_DEFAULT_EXECUTION_POLICY Kokkos::Experimental::OpenACC
+#  elif defined(MINIWEATHER_KOKKOS_SERIAL)
+#    define MINIWEATHER_DEFAULT_EXECUTION_POLICY Kokkos::Serial
+#  else
+#    define MINIWEATHER_DEFAULT_EXECUTION_POLICY Kokkos::DefaultExecutionSpace
+#  endif // MINIWEATHER_KOKKOS
+#elif defined(MINIWEATHER_STDPAR)
+#  define MINIWEATHER_DEFAULT_EXECUTION_POLICY stdpar_ranges_execution_policy
+#elif defined(MINIWEATHER_OPENACC)
+// FIXME define a separate one for OpenACC
+#  define MINIWEATHER_DEFAULT_EXECUTION_POLICY host_serial_execution_policy
+#elif defined(MINIWEATHER_SERIAL)
+#  define MINIWEATHER_DEFAULT_EXECUTION_POLICY host_serial_execution_policy
 #else
-  return host_serial_execution_policy{};
+#  error "No default execution policy defined"
 #endif
+
+auto default_execution_policy() {
+  return MINIWEATHER_DEFAULT_EXECUTION_POLICY{};
 }
 
 // Intra-(MPI-process) parallelization needs to happen in the following functions.
@@ -42,16 +71,16 @@ auto default_execution_policy() {
 // local_reductions
 
 int main(int argc, char **argv) {
-  auto exec_policy = default_execution_policy();
-  auto memory_space = default_memory_space();
+  auto exec_space = default_execution_policy();
+  auto memory_space = default_memory_space(exec_space);
   auto [const_scalars, scalars, const_arrays, arrays] =
-    init(exec_policy, memory_space, &argc , &argv);
+    init(exec_space, memory_space, &argc, &argv);
 
   //Initial reductions for mass, kinetic energy, and total energy.
   //
   // mass0: initial domain total for mass
   // te0:   initial domain total for total energy
-  auto [mass0, te0] = reductions(exec_policy,
+  auto [mass0, te0] = reductions(exec_space,
     std::as_const(arrays).state(), const_scalars, const_arrays);
 #if ! defined(NO_INFORM)
   if (const_scalars.mainproc()) {
@@ -61,7 +90,7 @@ int main(int argc, char **argv) {
 #endif
 
   //Output the initial state
-  output(exec_policy, std::as_const(arrays).state(),
+  output(exec_space, std::as_const(arrays).state(),
     const_scalars, const_arrays, scalars);
 
   ////////////////////////////////////////////////////
@@ -74,7 +103,7 @@ int main(int argc, char **argv) {
     if (scalars.etime + scalars.dt > sim_time) {
       scalars.dt = sim_time - scalars.etime;
     }
-    perform_timestep(exec_policy,
+    perform_timestep(exec_space,
       arrays.state(), arrays.state_tmp(), arrays.flux(),
       arrays.tend(), const_scalars, const_arrays, scalars);
 #if ! defined(NO_INFORM)
@@ -88,7 +117,7 @@ int main(int argc, char **argv) {
     //If it's time for output, reset the counter, and do output
     if (scalars.output_counter >= output_freq) {
       scalars.output_counter = scalars.output_counter - output_freq;
-      output(exec_policy,
+      output(exec_space,
         arrays.state(), const_scalars, const_arrays, scalars);
     }
   }
@@ -100,7 +129,7 @@ int main(int argc, char **argv) {
 #endif
 
   //Final reductions for mass, kinetic energy, and total energy
-  auto [mass, te] = reductions(exec_policy,
+  auto [mass, te] = reductions(exec_space,
     arrays.state(), const_scalars, const_arrays);
   if (const_scalars.mainproc()) {
     printf("d_mass: %le\n" , (mass - mass0)/mass0);

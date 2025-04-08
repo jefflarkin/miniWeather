@@ -3,12 +3,11 @@
 #include "miniWeather_common.hpp"
 
 //Set this MPI task's halo values in the x-direction.
-template<class MemorySpace>
 void set_halo_values_x(
-  host_serial_execution_policy /* exec_policy */,
+  host_serial_execution_policy /* exec_space */,
   view_3d state,
   const global_const_scalars& scalars,
-  const global_const_arrays<MemorySpace>& arrays)
+  const global_const_arrays<host_serial_execution_policy, host_memory_space>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -55,12 +54,11 @@ void set_halo_values_x(
 
 //Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
 //decomposition in the vertical direction
-template<class MemorySpace>
 void set_halo_values_z(
-  host_serial_execution_policy /* exec_policy */,
+  host_serial_execution_policy /* exec_space */,
   view_3d state,
   const global_const_scalars& scalars,
-  const global_const_arrays<MemorySpace>& arrays)
+  const global_const_arrays<host_serial_execution_policy, host_memory_space>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -95,13 +93,12 @@ void set_halo_values_z(
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the x-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-template<class MemorySpace>
 void compute_tendencies_x(
-  host_serial_execution_policy /* exec_policy */,
+  host_serial_execution_policy /* exec_space */,
   view_3d_const state,
   view_3d flux, view_3d tend, double dt,
   const global_const_scalars& scalars,
-  const global_const_arrays<MemorySpace>& arrays)
+  const global_const_arrays<host_serial_execution_policy, host_memory_space>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -168,13 +165,12 @@ void compute_tendencies_x(
 //Since the halos are set in a separate routine, this will not require MPI
 //First, compute the flux vector at each cell interface in the z-direction (including hyperviscosity)
 //Then, compute the tendencies using those fluxes
-template<class MemorySpace>
 void compute_tendencies_z(
-  host_serial_execution_policy /* exec_policy */,
+  host_serial_execution_policy /* exec_space */,
   view_3d_const state,
   view_3d flux, view_3d tend, double dt,
   const global_const_scalars& scalars,
-  const global_const_arrays<MemorySpace>& arrays)
+  const global_const_arrays<host_serial_execution_policy, host_memory_space>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -246,15 +242,14 @@ void compute_tendencies_z(
   }
 }
 
-template<class MemorySpace>
 void apply_tendencies_to_fluid_state(
-  host_serial_execution_policy /* exec_policy */,
+  host_serial_execution_policy /* exec_space */,
   view_3d_const state_init,
   view_3d state_out,
   double dt /* not scalars.dt */,
   view_3d tend,
   const global_const_scalars& scalars,
-  const global_const_arrays<MemorySpace>& arrays)
+  const global_const_arrays<host_serial_execution_policy, host_memory_space>& arrays)
 {
   const int nx = scalars.nx;
   const int nz = scalars.nz;
@@ -284,7 +279,7 @@ void apply_tendencies_to_fluid_state(
 
 // Initialize the cell-averaged fluid state via Gauss-Legendre quadrature
 void initialize_cell_averaged_fluid_state(
-  host_serial_execution_policy /* exec_policy */,
+  host_serial_execution_policy /* exec_space */,
   view_3d state, view_3d state_tmp,
   int nx, int nz,
   int i_beg, int k_beg)
@@ -320,7 +315,7 @@ void initialize_cell_averaged_fluid_state(
 }
 
 void compute_hydrostatic_background_state(
-  host_serial_execution_policy /* exec_policy */,
+  host_serial_execution_policy /* exec_space */,
   view_1d hy_dens_cell,
   view_1d hy_dens_theta_cell,
   view_1d hy_dens_int,
@@ -351,12 +346,11 @@ void compute_hydrostatic_background_state(
   }
 }
 
-template<class MemorySpace>
 reduction_result local_reductions(
-  host_serial_execution_policy exec_policy,
+  host_serial_execution_policy exec_space,
   view_3d_const state,
   const global_const_scalars& const_scalars,
-  const global_const_arrays<MemorySpace>& const_arrays)
+  const global_const_arrays<host_serial_execution_policy, host_memory_space>& const_arrays)
 {
   reduction_result result{0.0, 0.0};
   const int nx = const_scalars.nx;

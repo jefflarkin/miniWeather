@@ -17,12 +17,12 @@ inline void ncwrap( int ierr , int line ) {
 //Output the fluid state (state) to a NetCDF file at a given elapsed model time (etime)
 //The file I/O uses parallel-netcdf, the only external library required for this mini-app.
 //If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
-template<class ExecutionPolicy, class MemorySpace>
+template<class ExecutionSpace, class MemorySpace>
 void output(
-  ExecutionPolicy exec_policy, // make this generic for now
+  ExecutionSpace exec_space, // make this generic for now
   view_3d_const state,
   const global_const_scalars& const_scalars,
-  const global_const_arrays<MemorySpace>& const_arrays,
+  const global_const_arrays<ExecutionSpace, MemorySpace>& const_arrays,
   global_scalars& scalars)
 {
   const int nx = const_scalars.nx;
