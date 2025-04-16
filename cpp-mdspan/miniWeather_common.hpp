@@ -85,113 +85,38 @@ using extents_1d =    md::extents<int, md::dynamic_extent>; // a.k.a. dims<1, in
 using view_1d =       md::mdspan<double,       extents_1d, md::layout_right>;
 using view_1d_const = md::mdspan<const double, extents_1d, md::layout_right>;
 
+// All dynamic array allocation happens in the two functions
+// make_unique_array_3d and make_unique_array_1d.
+// Overload them for your execution space and memory space types.
+// The functions take both execution and memory space in order to
+// support stream-ordered allocation (e.g., cudaMallocAsync).
+
 struct host_memory_space {};
 struct host_serial_execution_policy {};
 
+// Default behavior for host memory space is to use normal new and delete
+// via std::make_unique.  You can override this by overloading the function
+// for your execution space.
+template<class ExecutionSpace>
 std::unique_ptr<double[]>
-make_unique_array_3d(host_serial_execution_policy, host_memory_space, int X, int Y, int Z);
-std::unique_ptr<double[]>
-make_unique_array_1d(host_serial_execution_policy, host_memory_space, int X);
-
-// I don't like that I have to put this here instead of in the Kokkos-specific header.
-#if defined(MINIWEATHER_KOKKOS)
-template<class MemorySpace>
-  requires(Kokkos::is_memory_space_v<MemorySpace>)
-struct kokkos_deleter {
-  size_t alloc_size = 0;
-
-  void operator() (void* ptr) const {
-    MemorySpace{}.deallocate(ptr, alloc_size);
-  }
-};
-
-template<class ExecutionSpace, class MemorySpace>
-  requires(
-    Kokkos::is_execution_space_v<ExecutionSpace> &&
-    Kokkos::is_memory_space_v<MemorySpace>)
-std::unique_ptr<double[], kokkos_deleter<MemorySpace>>
-kokkos_make_unique_array_3d(ExecutionSpace exec_space,
-  MemorySpace memory_space, int X, int Y, int Z)
-{
-  using deleter_type = kokkos_deleter<MemorySpace>;
-  return std::unique_ptr<double[], deleter_type>(
-    static_cast<double*>(memory_space.allocate(exec_space, X * Y * Z)),
-    deleter_type{size_t(X) * size_t(Y) * size_t(Z)}
-  );
-}
-
-template<class ExecutionSpace, class MemorySpace>
-  requires(
-    Kokkos::is_execution_space_v<ExecutionSpace> &&
-    Kokkos::is_memory_space_v<MemorySpace>)
-std::unique_ptr<double[], kokkos_deleter<MemorySpace>>
-kokkos_make_unique_array_1d(ExecutionSpace exec_space,
-  MemorySpace memory_space, int X)
-{
-  using deleter_type = kokkos_deleter<MemorySpace>;
-  return std::unique_ptr<double[], deleter_type>(
-    static_cast<double*>(memory_space.allocate(exec_space, X)),
-    deleter_type{size_t(X)}
-  );
-}
-#endif // MINIWEATHER_KOKKOS
-
-#if defined(MINIWEATHER_KOKKOS_SERIAL)
-inline std::unique_ptr<double[], kokkos_deleter<Kokkos::HostSpace>>
-make_unique_array_3d(Kokkos::Serial exec_space,
-  Kokkos::HostSpace memory_space, int X, int Y, int Z)
-{
-  return kokkos_make_unique_array_3d(exec_space, memory_space, X, Y, Z);
-}
-
-inline std::unique_ptr<double[], kokkos_deleter<Kokkos::HostSpace>>
-make_unique_array_1d(Kokkos::Serial exec_space,
-  Kokkos::HostSpace memory_space, int X)
-{
-  return kokkos_make_unique_array_1d(exec_space, memory_space, X);
-}
-#endif // MINIWEATHER_KOKKOS_SERIAL
-
-#if defined(MINIWEATHER_KOKKOS_OPENACC)
-inline std::unique_ptr<double[], kokkos_deleter<Kokkos::Experimental::OpenACCSpace>>
-make_unique_array_3d(Kokkos::Experimental::OpenACC exec_space,
-  Kokkos::Experimental::OpenACCSpace memory_space, int X, int Y, int Z)
-{
-  return kokkos_make_unique_array_3d(exec_space, memory_space, X, Y, Z);
-}
-
-inline std::unique_ptr<double[], kokkos_deleter<Kokkos::Experimental::OpenACCSpace>>
-make_unique_array_1d(Kokkos::Experimental::OpenACC exec_space,
-  Kokkos::Experimental::OpenACCSpace memory_space, int X)
-{
-  return kokkos_make_unique_array_1d(exec_space, memory_space, X);
-}
-#endif // MINIWEATHER_KOKKOS_OPENACC
-
-// I don't like that I have to put this here instead of in the stdpar-specific header.
-#if defined(MINIWEATHER_STDPAR)
-struct stdpar_ranges_execution_policy {};
-
-inline std::unique_ptr<double[]>
-make_unique_array_3d(stdpar_ranges_execution_policy exec_space,
-  host_memory_space memory_space, int X, int Y, int Z)
-{
+make_unique_array_3d(ExecutionSpace, host_memory_space, int X, int Y, int Z) {
   return std::make_unique<double[]>(X * Y * Z);
 }
 
-inline std::unique_ptr<double[]>
-make_unique_array_1d(stdpar_ranges_execution_policy exec_space,
-  host_memory_space memory_space, int X)
-{
+template<class ExecutionSpace>
+std::unique_ptr<double[]>
+make_unique_array_1d(ExecutionSpace, host_memory_space, int X) {
   return std::make_unique<double[]>(X);
 }
-#endif // MINIWEATHER_STDPAR
 
-// All dynamic array allocation happens in the two functions
-// make_unique_array_3d and make_unique_array_1d.
-// Overload them for your execution space and memory space.
-// The functions take both in order to support stream-ordered allocation
-// (e.g., cudaMallocAsync).
+#if defined(MINIWEATHER_KOKKOS)
+#  include "miniWeather_kokkos_memory.hpp"
+#endif
+#if defined(MINIWEATHER_CUB)
+#  include "miniWeather_cub_memory.hpp"
+#endif
+
+
 template<class ExecutionSpace, class MemorySpace>
 using alloc_3d = decltype(make_unique_array_3d(ExecutionSpace{}, MemorySpace{}, 0, 0, 0));
 template<class ExecutionSpace, class MemorySpace>

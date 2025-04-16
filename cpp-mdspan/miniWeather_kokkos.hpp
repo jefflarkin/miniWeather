@@ -1,7 +1,11 @@
 #pragma once
 
-#include "miniWeather_common.hpp"
+#if defined(MINIWEATHER_KOKKOS)
 #include "Kokkos_Core.hpp"
+#else
+#  error "Kokkos is not enabled"
+#endif
+
 #include "cuda/std/array"
 
 #if defined(MINIWEATHER_KOKKOS_OPENACC)
@@ -20,24 +24,6 @@
 #  if ! defined(KOKKOS_ENABLE_CUDA)
 #    error "Kokkos CUDA is not enabled"
 #  endif
-#endif
-
-#if defined(KOKKOS_ENABLE_CUDA)
-auto default_memory_space(Kokkos::Cuda) {
-  return Kokkos::CudaSpace{};
-}
-#endif
-
-#if defined(KOKKOS_ENABLE_OPENACC)
-auto default_memory_space(Kokkos::Experimental::OpenACC) {
-  return Kokkos::Experimental::OpenACCSpace{};
-}
-#endif
-
-#if defined(KOKKOS_ENABLE_SERIAL)
-auto default_memory_space(Kokkos::Serial) {
-  return Kokkos::HostSpace{};
-}
 #endif
 
 template<class ExecutionPolicy, int MyRank>

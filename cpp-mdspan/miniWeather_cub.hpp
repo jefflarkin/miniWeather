@@ -12,14 +12,6 @@
 #  error "CUB is not enabled"
 #endif
 
-struct cub_execution_policy {
-  cudaStream_t stream = {};
-};
-
-cub_memory_space default_memory_space(cub_execution_policy) {
-  return cub_memory_space{};
-}
-
 //Set this MPI task's halo values in the x-direction.
 template<class MemorySpace>
 void set_halo_values_x(

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "miniWeather_common.hpp"
 #include <cuda/std/array>
 #include <execution>
 #include <numeric>
@@ -9,6 +8,8 @@
 #if ! defined(__cpp_lib_ranges_cartesian_product)
 #  include "cartesian_product.hpp"
 #endif
+
+struct stdpar_ranges_execution_policy {};
 
 constexpr auto stdpar_md_range(stdpar_ranges_execution_policy, int M) {
   return std::ranges::views::iota(0, M);
