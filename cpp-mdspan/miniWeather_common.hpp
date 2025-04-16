@@ -16,6 +16,7 @@
 
 #include "mdspan/mdspan.hpp"
 #include "unique_mdarray.hpp"
+#include "miniWeather_memory.hpp"
 
 #if defined(MINIWEATHER_KOKKOS)
 #  include "Kokkos_Core.hpp"
@@ -84,43 +85,6 @@ using view_3d_const = md::mdspan<const double, extents_3d, md::layout_right>;
 using extents_1d =    md::extents<int, md::dynamic_extent>; // a.k.a. dims<1, int>;
 using view_1d =       md::mdspan<double,       extents_1d, md::layout_right>;
 using view_1d_const = md::mdspan<const double, extents_1d, md::layout_right>;
-
-// All dynamic array allocation happens in the two functions
-// make_unique_array_3d and make_unique_array_1d.
-// Overload them for your execution space and memory space types.
-// The functions take both execution and memory space in order to
-// support stream-ordered allocation (e.g., cudaMallocAsync).
-
-struct host_memory_space {};
-struct host_serial_execution_policy {};
-
-// Default behavior for host memory space is to use normal new and delete
-// via std::make_unique.  You can override this by overloading the function
-// for your execution space.
-template<class ExecutionSpace>
-std::unique_ptr<double[]>
-make_unique_array_3d(ExecutionSpace, host_memory_space, int X, int Y, int Z) {
-  return std::make_unique<double[]>(X * Y * Z);
-}
-
-template<class ExecutionSpace>
-std::unique_ptr<double[]>
-make_unique_array_1d(ExecutionSpace, host_memory_space, int X) {
-  return std::make_unique<double[]>(X);
-}
-
-#if defined(MINIWEATHER_KOKKOS)
-#  include "miniWeather_kokkos_memory.hpp"
-#endif
-#if defined(MINIWEATHER_CUB)
-#  include "miniWeather_cub_memory.hpp"
-#endif
-
-
-template<class ExecutionSpace, class MemorySpace>
-using alloc_3d = decltype(make_unique_array_3d(ExecutionSpace{}, MemorySpace{}, 0, 0, 0));
-template<class ExecutionSpace, class MemorySpace>
-using alloc_1d = decltype(make_unique_array_1d(ExecutionSpace{}, MemorySpace{}, 0));
 
 // Variables that are set once in init and remain read-only throughout the simulation.
 struct global_const_scalars {
