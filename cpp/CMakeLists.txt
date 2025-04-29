@@ -116,7 +116,7 @@ target_link_libraries(parallelfor_simd_x_test "${LDFLAGS}")
 add_test(NAME YAKL_SIMD_X_TEST COMMAND ./check_output.sh ./parallelfor_simd_x_test 1e-9 4.5e-5 )
 
 
-include(YAKL/yakl_utils.cmake)
+include(YAKL/deprecated/yakl_utils.cmake)
 yakl_process_target(serial)
 yakl_process_target(serial_test)
 yakl_process_target(mpi)
