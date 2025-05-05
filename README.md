@@ -94,7 +94,7 @@ Once the time tendency is computed, the fluid PDEs are essentially now cast as a
 
 * Parallel-netcdf: https://github.com/Parallel-NetCDF/PnetCDF
   * This is a dependency for two reasons: (1) NetCDF files are easy to visualize and convenient to work with; (2) The users of this code shouldn't have to write their own parallel I/O.
-* Ncview: http://meteora.ucsd.edu/~pierce/ncview_home_page.html
+* Ncview: https://cirrus.ucsd.edu/ncview/
   * This is the easiest way to visualize NetCDF files.
 * MPI
 * For OpenACC: An OpenACC-capable compiler (PGI / Nvidia, Cray, GNU)

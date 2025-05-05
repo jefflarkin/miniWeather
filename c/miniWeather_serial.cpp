@@ -16,6 +16,8 @@
 #include "pnetcdf.h"
 #include <chrono>
 
+#define MINIWEATHER_ONLY_OUTPUT_THETA 1
+
 constexpr double pi        = 3.14159265358979323846264338327;   //Pi
 constexpr double grav      = 9.8;                               //Gravitational acceleration (m / s^2)
 constexpr double cp        = 1004.;                             //Specific heat of dry air at constant pressure
@@ -56,8 +58,9 @@ constexpr double qweights[] = { 0.277777777777777777777777777779E0 , 0.444444444
 ///////////////////////////////////////////////////////////////////////////////////////
 //The x-direction length is twice as long as the z-direction length
 //So, you'll want to have nx_glob be twice as large as nz_glob
-int    constexpr nx_glob       = _NX;            //Number of total cells in the x-direction
+
 int    constexpr nz_glob       = _NZ;            //Number of total cells in the z-direction
+int    constexpr nx_glob       = 2 * nz_glob;    //Number of total cells in the x-direction
 double constexpr sim_time      = _SIM_TIME;      //How many seconds to run the simulation
 double constexpr output_freq   = _OUT_FREQ;      //How frequently to output data to file (in seconds)
 int    constexpr data_spec_int = _DATA_SPEC;     //How to initialize the data
@@ -132,6 +135,10 @@ int main(int argc, char **argv) {
 
   //Initial reductions for mass, kinetic energy, and total energy
   reductions(mass0,te0);
+  {
+    fprintf(stderr, "mass0: %le\n" , mass0);
+    fprintf(stderr, "te0:   %le\n" , te0  );
+  }
 
   //Output the initial state
   output(state,etime);
@@ -147,7 +154,7 @@ int main(int argc, char **argv) {
     perform_timestep(state,state_tmp,flux,tend,dt);
     //Inform the user
 #ifndef NO_INFORM
-    if (mainproc) { printf( "Elapsed Time: %lf / %lf\n", etime , sim_time ); }
+    if (mainproc) { fprintf(stderr, "Elapsed Time: %lf / %lf\n", etime , sim_time ); }
 #endif
     //Update the elapsed time and output counter
     etime = etime + dt;
@@ -157,18 +164,27 @@ int main(int argc, char **argv) {
       output_counter = output_counter - output_freq;
       output(state,etime);
     }
+#if 0
+    {
+      double mass = 0.0;
+      double te = 0.0;
+      reductions(mass, te);
+      fprintf(stderr, "mass: %le\n" , mass );
+      fprintf(stderr, "te:   %le\n" , te   );
+    }
+#endif // 0
   }
   auto t2 = std::chrono::steady_clock::now();
   if (mainproc) {
-    std::cout << "CPU Time: " << std::chrono::duration<double>(t2-t1).count() << " sec\n";
+    std::cerr << "CPU Time: " << std::chrono::duration<double>(t2-t1).count() << " sec\n";
   }
 
   //Final reductions for mass, kinetic energy, and total energy
   reductions(mass,te);
 
   if (mainproc) {
-    printf( "d_mass: %le\n" , (mass - mass0)/mass0 );
-    printf( "d_te:   %le\n" , (te   - te0  )/te0   );
+    fprintf(stderr, "d_mass: %le\n" , (mass - mass0)/mass0 );
+    fprintf(stderr, "d_te:   %le\n" , (te   - te0  )/te0   );
   }
 
   finalize();
@@ -183,6 +199,7 @@ int main(int argc, char **argv) {
 // q**    = q[n] + dt/2 * rhs(q*  )
 // q[n+1] = q[n] + dt/1 * rhs(q** )
 void perform_timestep( double *state , double *state_tmp , double *flux , double *tend , double dt ) {
+  //fprintf(stderr, "direction_switch: %d\n", direction_switch);
   if (direction_switch) {
     //x-direction first
     semi_discrete_step( state , state     , state_tmp , dt / 3 , DIR_X , flux , tend );
@@ -523,9 +540,9 @@ void init( int *argc , char ***argv ) {
 
   //If I'm the main process in MPI, display some grid information
   if (mainproc) {
-    printf( "nx_glob, nz_glob: %d %d\n", nx_glob, nz_glob);
-    printf( "dx,dz: %lf %lf\n",dx,dz);
-    printf( "dt: %lf\n",dt);
+    fprintf(stderr, "nx_glob, nz_glob: %d %d\n", nx_glob, nz_glob);
+    fprintf(stderr, "dx,dz: %lf %lf\n",dx,dz);
+    fprintf(stderr, "dt: %lf\n",dt);
   }
   //Want to make sure this info is displayed before further output
   ierr = MPI_Barrier(MPI_COMM_WORLD);
@@ -722,6 +739,7 @@ double sample_ellipse_cosine( double x , double z , double amp , double x0 , dou
 //The file I/O uses parallel-netcdf, the only external library required for this mini-app.
 //If it's too cumbersome, you can comment the I/O out, but you'll miss out on some potentially cool graphics
 void output( double *state , double etime ) {
+#if 1
   int ncid, t_dimid, x_dimid, z_dimid, dens_varid, uwnd_varid, wwnd_varid, theta_varid, t_varid, dimids[3];
   int i, k, ind_r, ind_u, ind_w, ind_t;
   MPI_Offset st1[1], ct1[1], st3[3], ct3[3];
@@ -729,53 +747,72 @@ void output( double *state , double etime ) {
   double *dens, *uwnd, *wwnd, *theta;
   double *etimearr;
   //Inform the user
-  if (mainproc) { printf("*** OUTPUT ***\n"); }
+  if (mainproc) { fprintf(stderr, "*** OUTPUT ***\n"); }
   //Allocate some (big) temp arrays
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
   dens     = (double *) malloc(nx*nz*sizeof(double));
   uwnd     = (double *) malloc(nx*nz*sizeof(double));
   wwnd     = (double *) malloc(nx*nz*sizeof(double));
+#endif
   theta    = (double *) malloc(nx*nz*sizeof(double));
   etimearr = (double *) malloc(1    *sizeof(double));
+
+  // PNetCDF needs an MPI_Info object that is not MPI_INFO_NULL.
+  // It's possible that earlier PNetCDF versions tolerated MPI_INFO_NULL.
+  MPI_Info mpi_info;
+  auto info_err = MPI_Info_create(&mpi_info);
+  if (info_err != MPI_SUCCESS) {
+    fprintf(stderr, "Error creating MPI Info object\n");
+    MPI_Abort(MPI_COMM_WORLD, -1);
+  }
 
   //If the elapsed time is zero, create the file. Otherwise, open the file
   if (etime == 0) {
     //Create the file
-    ncwrap( ncmpi_create( MPI_COMM_WORLD , "output.nc" , NC_CLOBBER , MPI_INFO_NULL , &ncid ) , __LINE__ );
+    ncwrap( ncmpi_create( MPI_COMM_WORLD , "output.nc" , NC_CLOBBER , mpi_info , &ncid ) , __LINE__ );
     //Create the dimensions
     ncwrap( ncmpi_def_dim( ncid , "t" , (MPI_Offset) NC_UNLIMITED , &t_dimid ) , __LINE__ );
     ncwrap( ncmpi_def_dim( ncid , "x" , (MPI_Offset) nx_glob      , &x_dimid ) , __LINE__ );
     ncwrap( ncmpi_def_dim( ncid , "z" , (MPI_Offset) nz_glob      , &z_dimid ) , __LINE__ );
     //Create the variables
     dimids[0] = t_dimid;
-    ncwrap( ncmpi_def_var( ncid , "t"     , NC_DOUBLE , 1 , dimids ,     &t_varid ) , __LINE__ );
+    ncwrap( ncmpi_def_var( ncid , "t_var"     , NC_DOUBLE , 1 , dimids ,     &t_varid ) , __LINE__ );
     dimids[0] = t_dimid; dimids[1] = z_dimid; dimids[2] = x_dimid;
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
     ncwrap( ncmpi_def_var( ncid , "dens"  , NC_DOUBLE , 3 , dimids ,  &dens_varid ) , __LINE__ );
     ncwrap( ncmpi_def_var( ncid , "uwnd"  , NC_DOUBLE , 3 , dimids ,  &uwnd_varid ) , __LINE__ );
     ncwrap( ncmpi_def_var( ncid , "wwnd"  , NC_DOUBLE , 3 , dimids ,  &wwnd_varid ) , __LINE__ );
+#endif
     ncwrap( ncmpi_def_var( ncid , "theta" , NC_DOUBLE , 3 , dimids , &theta_varid ) , __LINE__ );
     //End "define" mode
     ncwrap( ncmpi_enddef( ncid ) , __LINE__ );
   } else {
     //Open the file
-    ncwrap( ncmpi_open( MPI_COMM_WORLD , "output.nc" , NC_WRITE , MPI_INFO_NULL , &ncid ) , __LINE__ );
+    ncwrap( ncmpi_open( MPI_COMM_WORLD , "output.nc" , NC_WRITE , mpi_info , &ncid ) , __LINE__ );
     //Get the variable IDs
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
     ncwrap( ncmpi_inq_varid( ncid , "dens"  ,  &dens_varid ) , __LINE__ );
     ncwrap( ncmpi_inq_varid( ncid , "uwnd"  ,  &uwnd_varid ) , __LINE__ );
     ncwrap( ncmpi_inq_varid( ncid , "wwnd"  ,  &wwnd_varid ) , __LINE__ );
+#endif
     ncwrap( ncmpi_inq_varid( ncid , "theta" , &theta_varid ) , __LINE__ );
-    ncwrap( ncmpi_inq_varid( ncid , "t"     ,     &t_varid ) , __LINE__ );
+    ncwrap( ncmpi_inq_varid( ncid , "t_var" ,     &t_varid ) , __LINE__ );
   }
 
   //Store perturbed values in the temp arrays for output
   for (k=0; k<nz; k++) {
     for (i=0; i<nx; i++) {
       ind_r = ID_DENS*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)      
       ind_u = ID_UMOM*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
       ind_w = ID_WMOM*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
+#endif
       ind_t = ID_RHOT*(nz+2*hs)*(nx+2*hs) + (k+hs)*(nx+2*hs) + i+hs;
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)
       dens [k*nx+i] = state[ind_r];
       uwnd [k*nx+i] = state[ind_u] / ( hy_dens_cell[k+hs] + state[ind_r] );
       wwnd [k*nx+i] = state[ind_w] / ( hy_dens_cell[k+hs] + state[ind_r] );
+#endif      
       theta[k*nx+i] = ( state[ind_t] + hy_dens_theta_cell[k+hs] ) / ( hy_dens_cell[k+hs] + state[ind_r] ) - hy_dens_theta_cell[k+hs] / hy_dens_cell[k+hs];
     }
   }
@@ -783,9 +820,11 @@ void output( double *state , double etime ) {
   //Write the grid data to file with all the processes writing collectively
   st3[0] = num_out; st3[1] = k_beg; st3[2] = i_beg;
   ct3[0] = 1      ; ct3[1] = nz   ; ct3[2] = nx   ;
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)      
   ncwrap( ncmpi_put_vara_double_all( ncid ,  dens_varid , st3 , ct3 , dens  ) , __LINE__ );
   ncwrap( ncmpi_put_vara_double_all( ncid ,  uwnd_varid , st3 , ct3 , uwnd  ) , __LINE__ );
   ncwrap( ncmpi_put_vara_double_all( ncid ,  wwnd_varid , st3 , ct3 , wwnd  ) , __LINE__ );
+#endif
   ncwrap( ncmpi_put_vara_double_all( ncid , theta_varid , st3 , ct3 , theta ) , __LINE__ );
 
   //Only the main process needs to write the elapsed time
@@ -795,32 +834,39 @@ void output( double *state , double etime ) {
   if (mainproc) {
     st1[0] = num_out;
     ct1[0] = 1;
-    etimearr[0] = etime; ncwrap( ncmpi_put_vara_double( ncid , t_varid , st1 , ct1 , etimearr ) , __LINE__ );
+    etimearr[0] = etime;
+    ncwrap( ncmpi_put_vara_double( ncid , t_varid , st1 , ct1 , etimearr ) , __LINE__ );
   }
   //End "independent" write mode
   ncwrap( ncmpi_end_indep_data(ncid) , __LINE__ );
 
   //Close the file
   ncwrap( ncmpi_close(ncid) , __LINE__ );
-
+#endif // 0
   //Increment the number of outputs
   num_out = num_out + 1;
 
+#if 1
+  MPI_Info_free(&mpi_info);
+  
   //Deallocate the temp arrays
+#if ! defined(MINIWEATHER_ONLY_OUTPUT_THETA)      
   free( dens     );
   free( uwnd     );
   free( wwnd     );
+#endif
   free( theta    );
   free( etimearr );
+#endif // 0
 }
 
 
 //Error reporting routine for the PNetCDF I/O
 void ncwrap( int ierr , int line ) {
   if (ierr != NC_NOERR) {
-    printf("NetCDF Error at line: %d\n", line);
-    printf("%s\n",ncmpi_strerror(ierr));
-    exit(-1);
+    fprintf(stderr, "NetCDF Error at line: %d\n", line);
+    fprintf(stderr, "%s\n", ncmpi_strerror(ierr));
+    MPI_Abort(MPI_COMM_WORLD, -1);
   }
 }
 
